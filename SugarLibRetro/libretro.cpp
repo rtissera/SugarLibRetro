@@ -22,8 +22,10 @@
 #include "Machine.h"
 #include "Cartridge.h"
 #include "IDirectories.h"
+#include "Inotify.h"
 #include "libretro.h"
 #include <string>
+#include <vector>
 
 //#define WIDTH  768
 #define WIDTH  640
@@ -281,6 +283,25 @@ static bool use_audio_cb;
 static float last_aspect;
 static float last_sample_rate;
 
+// FDC::LoadDisk() only reports success/failure through this notifier (see
+// EmulatorEngine::LoadDisk's switch on the return code, which -- in the
+// upstream Qt app -- feeds a message box; here it just logs so a failed
+// load isn't silently indistinguishable from a working one in the core log).
+class RetroFdcNotify : public IFdcNotify
+{
+public:
+   virtual void ItemLoaded(const char* disk_path, int load_ok, int drive_number)
+   {
+      if (log_cb == nullptr)
+         return;
+      const char* what = (load_ok == 0) ? "OK" : (load_ok == -1) ? "file not found" : "unknown/unsupported format";
+      log_cb(RETRO_LOG_INFO, "FDC: drive %d load '%s': %s (%d).\n", drive_number, disk_path, what, load_ok);
+   }
+   virtual void DiskEject() {}
+   virtual void DiskRunning(bool on) {}
+   virtual void TrackChanged(int nb_tracks) {}
+};
+
 // Definition of emulator
 static EmulatorEngine* emulator_ = nullptr;
 static Motherboard * motherboard_ = nullptr;
@@ -289,6 +310,7 @@ static RetroDisplay display_;
 static Keyboard keyboard_;
 static RetroDirectories directories_;
 static MachineSettings machine_settings_;
+static RetroFdcNotify fdc_notify_;
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -389,6 +411,7 @@ void retro_init(void)
    emulator_->SetDirectories(&directories_);
    emulator_->SetConfigurationManager(&conf_manager_);
    emulator_->Init(&display_, nullptr);
+   emulator_->SetNotifier(&fdc_notify_);
 
    struct retro_variable var = { "amstradcpc_model", nullptr };
    environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
@@ -420,7 +443,13 @@ void retro_get_system_info(struct retro_system_info *info)
    info->library_name = "Sugarbox";
    info->library_version = "v1.00";
    info->need_fullpath = true;
-   info->valid_extensions = "cpr"; // Anything is fine, we don't care.
+   // MediaManager/DskTypeManager auto-detects the real format from content
+   // (magic bytes), not just the extension -- this list just tells the
+   // frontend what to offer/accept as content for this core. cpr is the
+   // Plus/GX4000 cartridge format (see LoadCprFromBuffer); the rest are disk
+   // formats EmulatorEngine::LoadDisk() dispatches to CPCCoreEmu's own
+   // FormatType* parsers for (FormatTypeDSK/EDSK/IPF/CTRAW/RAW/HFE/HFEv3/SCP).
+   info->valid_extensions = "cpr|dsk|edsk|ipf|ctr|raw|hfe|scp|m3u";
 }
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -826,6 +855,93 @@ static void keyboard_cb(bool down, unsigned keycode,
       down ? "yes" : "no", keycode, character, mod);
 }
 
+// ---------------------------------------------------------------------------
+// Disk swapping (RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE).
+//
+// EmulatorEngine::LoadDisk(const char*, drive_number) already auto-detects
+// the real format from content (DiskGen::CreateDisk -> DiskBuilder::CanLoad,
+// dispatching to CPCCoreEmu's own FormatType{DSK,EDSK,IPF,CTRAW,RAW,HFE,SCP}
+// parsers) -- there's no MediaManager plumbing to wire up here beyond
+// telling it which path to open. This is drive 0 (floppy A:) only; drive 1
+// (B:) is a later addition if it turns out to matter for real-world CPC
+// software (most titles are single-drive).
+static std::vector<std::string> disk_images_;
+static unsigned current_disk_index_ = 0;
+static bool disk_ejected_ = false;
+
+static bool IsCartridgeFile(const char* path)
+{
+   const char* ext = strrchr(path, '.');
+   if (ext == nullptr)
+      return false;
+   return (ext[0] == '.' && (ext[1] == 'c' || ext[1] == 'C') &&
+           (ext[2] == 'p' || ext[2] == 'P') && (ext[3] == 'r' || ext[3] == 'R') && ext[4] == '\0');
+}
+
+static bool dc_set_eject_state(bool ejected)
+{
+   if (emulator_ == nullptr)
+      return false;
+   if (ejected)
+      emulator_->Eject(0);
+   else if (current_disk_index_ < disk_images_.size())
+      emulator_->LoadDisk(disk_images_[current_disk_index_].c_str(), 0);
+   disk_ejected_ = ejected;
+   return true;
+}
+
+static bool dc_get_eject_state(void)
+{
+   return disk_ejected_;
+}
+
+static unsigned dc_get_image_index(void)
+{
+   return current_disk_index_;
+}
+
+static bool dc_set_image_index(unsigned index)
+{
+   // Per the libretro spec this may only be called while ejected; setting
+   // it just records the index; the frontend is expected to reinsert
+   // (set_eject_state(false)) afterwards, which is what actually loads it.
+   if (!disk_ejected_)
+      return false;
+   current_disk_index_ = index; // index >= size() is the valid "no disk" state
+   return true;
+}
+
+static unsigned dc_get_num_images(void)
+{
+   return (unsigned)disk_images_.size();
+}
+
+static bool dc_replace_image_index(unsigned index, const struct retro_game_info* info)
+{
+   if (index >= disk_images_.size())
+      return false;
+   if (info == nullptr)
+      disk_images_.erase(disk_images_.begin() + index);
+   else
+      disk_images_[index] = info->path;
+   return true;
+}
+
+static bool dc_add_image_index(void)
+{
+   disk_images_.push_back(std::string());
+   return true;
+}
+
+static struct retro_disk_control_callback disk_control_cb = {
+   dc_set_eject_state,
+   dc_get_eject_state,
+   dc_get_image_index,
+   dc_set_image_index,
+   dc_get_num_images,
+   dc_replace_image_index,
+   dc_add_image_index,
+};
 
 bool retro_load_game(const struct retro_game_info *info)
 {
@@ -856,30 +972,52 @@ bool retro_load_game(const struct retro_game_info *info)
    struct retro_audio_callback audio_cb = { audio_callback, audio_set_state };
    use_audio_cb = environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK, &audio_cb);
 
+   environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &disk_control_cb);
+   disk_images_.clear();
+   current_disk_index_ = 0;
+   disk_ejected_ = false;
+
    check_variables();
 
-   (void)info;
-   if (info != nullptr)
+   if (info != nullptr && info->path != nullptr)
    {
-      FILE* f;
-      unsigned char* buffer_ = nullptr;
-      f = fopen(info->path, "rb");
-      if (f != nullptr)
+      if (IsCartridgeFile(info->path))
       {
-         fseek(f, 0, SEEK_END);
-         unsigned int buffer_size_ = ftell(f);
-         rewind(f);
-         unsigned char* buffer_ = new unsigned char[buffer_size_];
+         // Cartridge banks are a distinct memory region from ROM/disk (see
+         // LoadCprFromBuffer) -- a fresh cartridge genuinely does need the
+         // machine reset, same as swapping a real GX4000 cartridge requires
+         // a power cycle.
+         FILE* f = fopen(info->path, "rb");
+         if (f != nullptr)
+         {
+            fseek(f, 0, SEEK_END);
+            unsigned int buffer_size_ = ftell(f);
+            rewind(f);
+            unsigned char* buffer_ = new unsigned char[buffer_size_];
 
-         fread(buffer_, buffer_size_, 1, f);
-         LoadCprFromBuffer(buffer_, buffer_size_);
-         fclose(f);
+            fread(buffer_, buffer_size_, 1, f);
+            LoadCprFromBuffer(buffer_, buffer_size_);
+            delete[] buffer_;
+            fclose(f);
+         }
+
+         motherboard_->GetPSG()->Reset();
+         motherboard_->GetSig()->Reset();
+         motherboard_->InitStartOptimizedPlus();
+         motherboard_->OnOff();
       }
-
-      motherboard_->GetPSG()->Reset();
-      motherboard_->GetSig()->Reset();
-      motherboard_->InitStartOptimizedPlus();
-      motherboard_->OnOff();
+      else
+      {
+         // Disk: EmulatorEngine::LoadDisk() auto-detects the real format
+         // from content and inserts it into drive A: (0) without needing a
+         // machine reset -- inserting a floppy doesn't reboot a real CPC
+         // either. Also seed the disk-control image list with it so
+         // set_image_index()/get_num_images() have something to report even
+         // before the frontend calls add_image_index() for an M3U's other
+         // entries.
+         disk_images_.push_back(info->path);
+         emulator_->LoadDisk(info->path, 0);
+      }
    }
 
    return true;
