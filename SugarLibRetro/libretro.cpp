@@ -180,10 +180,17 @@ static const KeyMapEntry kKeyMap[] = {
    { RETROK_BACKSPACE,   9, 7 }, { RETROK_DELETE,  9, 7 },
 };
 
-// Autorun: types RUN" + Enter once, shortly after a fresh disk/tape load.
-// The CPC needs this to launch anything that isn't a .cpr cartridge -- real
-// hardware behavior (AMSDOS's RUN" with no filename loads/runs the first
-// program file on the disc), not something specific to this core.
+// Autorun: types a launch command shortly after a fresh disk/tape load.
+// The CPC needs one to start anything that isn't a .cpr cartridge -- real
+// hardware behaviour, not something specific to this core.
+//
+// The command itself comes from the engine, not guessed here: FDC::
+// GetAutorun(drive, buf, len) -> DiskGen::GetAutorun() reads the inserted
+// disk's actual catalogue and applies a rule table (DiskGen.cpp), returning
+// AUTO_FILE + a filename (-> RUN"<file>) or AUTO_CPM (-> |CPM). This works
+// for every disk format the engine can parse, including the flux ones,
+// because it goes through IDisk::GetCat() rather than parsing an image
+// here. Same call SugarboxV2's own Emulation::ItemLoaded() uses.
 //
 // This does NOT use EmulatorEngine::Paste()/CharPressed() -- that path
 // resolves typed characters against KeyboardHandler::keyboard_map_, which
@@ -193,22 +200,74 @@ static const KeyMapEntry kKeyMap[] = {
 // silence log spam from ~600 undeclared per-key lookups -- so
 // keyboard_map_ has no real char associations and Paste() would silently
 // do nothing. Instead this drives the same matrix update_input() already
-// writes each frame via ForceKeyboardState(), which is proven working.
+// writes each frame, which is proven working.
+//
+// Character -> (line, bit, shift) for everything an AMSDOS command line can
+// need, derived from the canonical matrix documented above (in each of that
+// table's two-character annotations the FIRST character is the shifted
+// result, the second the unshifted one -- verified empirically for
+// shift+2 = '"').
 struct AutorunKey { char c; int line; int bit; bool shift; };
 static const AutorunKey kAutorunKeys[] = {
-   { 'R', 6, 2, false }, { 'U', 5, 2, false }, { 'N', 5, 6, false },
-   { '"', 8, 1, true  }, { '\r', 2, 2, false },
+   // Letters (unshifted; AMSDOS filenames are case-insensitive)
+   { 'A', 8, 5, false }, { 'B', 6, 6, false }, { 'C', 7, 6, false },
+   { 'D', 7, 5, false }, { 'E', 7, 2, false }, { 'F', 6, 5, false },
+   { 'G', 6, 4, false }, { 'H', 5, 4, false }, { 'I', 4, 3, false },
+   { 'J', 5, 5, false }, { 'K', 4, 5, false }, { 'L', 4, 4, false },
+   { 'M', 4, 6, false }, { 'N', 5, 6, false }, { 'O', 4, 2, false },
+   { 'P', 3, 3, false }, { 'Q', 8, 3, false }, { 'R', 6, 2, false },
+   { 'S', 7, 4, false }, { 'T', 6, 3, false }, { 'U', 5, 2, false },
+   { 'V', 6, 7, false }, { 'W', 7, 3, false }, { 'X', 7, 7, false },
+   { 'Y', 5, 3, false }, { 'Z', 8, 7, false },
+   // Digits (unshifted)
+   { '0', 4, 0, false }, { '1', 8, 0, false }, { '2', 8, 1, false },
+   { '3', 7, 1, false }, { '4', 7, 0, false }, { '5', 6, 1, false },
+   { '6', 6, 0, false }, { '7', 5, 1, false }, { '8', 5, 0, false },
+   { '9', 4, 1, false },
+   // Punctuation an AMSDOS filename / RSX command can contain
+   { ' ',  5, 7, false }, { '\r', 2, 2, false },
+   { '.',  4, 7, false }, { ',',  3, 7, false }, { ':',  3, 5, false },
+   { ';',  3, 4, false }, { '/',  3, 6, false }, { '-',  3, 1, false },
+   { '@',  3, 2, false }, { '[',  2, 1, false }, { ']',  2, 3, false },
+   { '\\', 2, 6, false },
+   // Shifted forms
+   { '"', 8, 1, true }, { '|', 3, 2, true }, { '!', 8, 0, true },
+   { '*', 3, 5, true }, { '+', 3, 4, true }, { '?', 3, 6, true },
+   { '=', 3, 1, true }, { '<', 4, 7, true }, { '>', 3, 7, true },
+   { '(', 5, 0, true }, { ')', 4, 1, true }, { '_', 4, 0, true },
+   { '\'', 5, 1, true }, { '&', 6, 0, true }, { '%', 6, 1, true },
+   { '$', 7, 0, true }, { '#', 7, 1, true }, { '^', 3, 0, true },
 };
-static const char kAutorunSequence[] = "RUN\"\r";
+
+// Filled by ArmAutorun(); "RUN\"<file>\r", "|CPM\r", "CAT\r" or "RUN\"\r".
+static char autorun_sequence_[64] = { 0 };
 enum AutorunState { AUTORUN_IDLE, AUTORUN_WAITING, AUTORUN_PRE_SHIFT, AUTORUN_PRESS, AUTORUN_POST_SHIFT, AUTORUN_RELEASE, AUTORUN_DONE };
 static AutorunState autorun_state_ = AUTORUN_IDLE;
 static int autorun_timer_ = 0;
 static unsigned autorun_char_index_ = 0;
 
-// ~2s at 50Hz before typing (mirrors CPCCoreEmu's own Paste() gate, which
+// ~3s at 50Hz before typing (mirrors CPCCoreEmu's own Paste() gate, which
 // waits for 2000ms of emulated time before considering the machine ready),
-// ~150ms per phase -- generous for the CPC's keyboard scan rate.
-static void ArmAutorun() { autorun_state_ = AUTORUN_WAITING; autorun_timer_ = 150; autorun_char_index_ = 0; }
+// ~400ms per phase -- generous for the CPC's keyboard scan rate.
+// Uppercased on the way in so a lowercase catalogue entry still matches
+// kAutorunKeys (AMSDOS filenames are case-insensitive).
+static void ArmAutorun(const char* command)
+{
+   if (command == nullptr || *command == '\0')
+      return;
+   size_t i = 0;
+   for (; command[i] != '\0' && i < sizeof(autorun_sequence_) - 1; ++i)
+   {
+      char c = command[i];
+      if (c >= 'a' && c <= 'z')
+         c -= 'a' - 'A';
+      autorun_sequence_[i] = c;
+   }
+   autorun_sequence_[i] = '\0';
+   autorun_state_ = AUTORUN_WAITING;
+   autorun_timer_ = 150;
+   autorun_char_index_ = 0;
+}
 
 static void TickAutorun(unsigned char matrix[10])
 {
@@ -225,7 +284,7 @@ static void TickAutorun(unsigned char matrix[10])
       return;
    }
 
-   const char c = kAutorunSequence[autorun_char_index_];
+   const char c = autorun_sequence_[autorun_char_index_];
    if (c == '\0')
    {
       autorun_state_ = AUTORUN_DONE;
@@ -643,6 +702,8 @@ static RetroSound retro_sound_;
 // EmulatorEngine::LoadDisk's switch on the return code, which -- in the
 // upstream Qt app -- feeds a message box; here it just logs so a failed
 // load isn't silently indistinguishable from a working one in the core log).
+static void HandleAutorunForLoadedItem(int load_ok, int drive_number);
+
 class RetroFdcNotify : public IFdcNotify
 {
 public:
@@ -650,10 +711,16 @@ public:
    {
       if (load_ok == 0)
          PlayFdcSfx(insert_wav, retro_sound_.GetSampleRate());
-      if (log_cb == nullptr)
-         return;
-      const char* what = (load_ok == 0) ? "OK" : (load_ok == -1) ? "file not found" : "unknown/unsupported format";
-      log_cb(RETRO_LOG_INFO, "FDC: drive %d load '%s': %s (%d).\n", drive_number, disk_path, what, load_ok);
+      if (log_cb != nullptr)
+      {
+         const char* what = (load_ok == 0) ? "OK" : (load_ok == -1) ? "file not found" : "unknown/unsupported format";
+         log_cb(RETRO_LOG_INFO, "FDC: drive %d load '%s': %s (%d).\n", drive_number, disk_path, what, load_ok);
+      }
+
+      // Autorun, same trigger point and same engine call SugarboxV2's own
+      // Emulation::ItemLoaded() uses. Deferred to a helper defined further
+      // down, where emulator_/autorun_enabled_ are in scope.
+      HandleAutorunForLoadedItem(load_ok, drive_number);
    }
    virtual void DiskEject() { PlayFdcSfx(eject_wav, retro_sound_.GetSampleRate()); }
    // Never actually called by the current CPCCoreEmu FDC (grepped -- only
@@ -676,6 +743,47 @@ static RetroDisplay display_;
 static RetroDirectories directories_;
 static MachineSettings machine_settings_;
 static RetroFdcNotify fdc_notify_;
+static bool autorun_enabled_ = true;
+
+// Picks the launch command for freshly-loaded media. drive_number == -1
+// means this was a tape, not a disk: the cassette firmware's RUN" with no
+// filename loads the next tape file, which is the correct command there.
+// For disks the command comes from the engine's own catalogue-driven
+// detection (FDC::GetAutorun -> DiskGen::GetAutorun), not guessed here.
+static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
+{
+   if (!autorun_enabled_ || load_ok != 0)
+      return;
+   if (drive_number < 0)
+   {
+      ArmAutorun("RUN\"\r");
+   }
+   else if (emulator_ != nullptr)
+   {
+      char auto_file[16] = { 0 };
+      char command[64];
+      switch (emulator_->GetFDC()->GetAutorun((unsigned)drive_number, auto_file, sizeof(auto_file)))
+      {
+      case IDisk::AUTO_CPM:
+         ArmAutorun("|CPM\r");
+         break;
+      case IDisk::AUTO_FILE:
+         snprintf(command, sizeof(command), "RUN\"%s\r", auto_file);
+         ArmAutorun(command);
+         break;
+      default:
+         // AUTO_UNKNOWN: the engine's rule table didn't recognise this disc.
+         // CAT at least puts its real catalogue on screen so the user can
+         // type the right RUN" themselves, instead of leaving them at a bare
+         // Ready prompt (or, worse, AMSDOS's "Bad command" from a RUN" with
+         // no filename).
+         ArmAutorun("CAT\r");
+         break;
+      }
+   }
+   if (log_cb != nullptr && autorun_sequence_[0] != '\0')
+      log_cb(RETRO_LOG_INFO, "Autorun: typing \"%s\".\n", autorun_sequence_);
+}
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -1215,6 +1323,18 @@ static void ApplyMachineType(const char* model)
    // string literals are never written through.
    machine_settings_.SetLowerRom(const_cast<char*>(lower_rom));
    machine_settings_.SetUpperRom(0, upper_rom);
+   // Expansion ROM slot 7 = AMSDOS, the disk operating system ROM. Without
+   // it the emulated machine has no disk firmware at all: RUN"/CAT fall
+   // through to the built-in CASSETTE handler, which is exactly why every
+   // disk test in this project showed "Press PLAY then any key:" instead of
+   // loading -- the FDC accepted and parsed the image (the "FDC: ... OK (0)"
+   // notifier fires, including for IPF/CAPS), but BASIC had no way to read
+   // it. amsdos.rom was bundled in this repo from the start yet never wired
+   // into a ROM slot. Slot 7 is where real 664/6128 hardware has it (and
+   // where the DDI-1 add-on puts it on a 464), and MachineSettings only
+   // populates upper_rom_[] from an INI we deliberately stub out, so
+   // nothing else was ever going to set it.
+   machine_settings_.SetUpperRom(7, "amsdos.rom");
    machine_settings_.SetCRTCType(CRTC::AMS40226);
    machine_settings_.SetTapePlugged(tape_plugged);
    machine_settings_.SetFDCPlugged(fdc_plugged);
@@ -1242,8 +1362,6 @@ static void ApplyMachineType(const char* model)
          emulator_->LoadCpr(cart_path.c_str());
    }
 }
-
-static bool autorun_enabled_ = true;
 
 static void check_variables(void)
 {
@@ -1553,8 +1671,10 @@ bool retro_load_game(const struct retro_game_info *info)
          // the actual format auto-detect/read to InsertTapeDelayed(), which
          // fires on its own during normal emulation ticking) -- no manual
          // "run one frame to process the deferred load" call needed here.
+         // Autorun is armed from RetroFdcNotify::ItemLoaded() instead of
+         // here -- that is where the engine reports the load actually
+         // succeeded and, for disks, what command to type.
          emulator_->LoadTape(info->path);
-         if (autorun_enabled_) ArmAutorun();
       }
       else
       {
@@ -1567,7 +1687,6 @@ bool retro_load_game(const struct retro_game_info *info)
          // entries.
          disk_images_.push_back(info->path);
          emulator_->LoadDisk(info->path, 0);
-         if (autorun_enabled_) ArmAutorun();
       }
    }
 
