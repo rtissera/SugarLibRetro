@@ -1100,6 +1100,40 @@ static bool dc_add_image_index(void)
    return true;
 }
 
+// EXT-only additions (retro_disk_control_ext_callback, negotiated below via
+// RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION -- cap32 does the
+// same negotiation). Lets the frontend restore the last-active disk of an
+// M3U across a session/save-state and show real filenames instead of just
+// "Disk 1"/"Disk 2" in its multi-disk UI.
+static bool dc_set_initial_image(unsigned index, const char* path)
+{
+   (void)path; // trust disk_images_ (already populated from the M3U/content
+               // path), just record which entry was active.
+   current_disk_index_ = index;
+   return true;
+}
+
+static bool dc_get_image_path(unsigned index, char* path, size_t len)
+{
+   if (index >= disk_images_.size() || disk_images_[index].empty())
+      return false;
+   strncpy(path, disk_images_[index].c_str(), len);
+   path[len - 1] = '\0';
+   return true;
+}
+
+static bool dc_get_image_label(unsigned index, char* label, size_t len)
+{
+   if (index >= disk_images_.size() || disk_images_[index].empty())
+      return false;
+   const std::string& full = disk_images_[index];
+   const size_t slash = full.find_last_of("/\\");
+   const std::string basename = (slash == std::string::npos) ? full : full.substr(slash + 1);
+   strncpy(label, basename.c_str(), len);
+   label[len - 1] = '\0';
+   return true;
+}
+
 static struct retro_disk_control_callback disk_control_cb = {
    dc_set_eject_state,
    dc_get_eject_state,
@@ -1108,6 +1142,19 @@ static struct retro_disk_control_callback disk_control_cb = {
    dc_get_num_images,
    dc_replace_image_index,
    dc_add_image_index,
+};
+
+static struct retro_disk_control_ext_callback disk_control_ext_cb = {
+   dc_set_eject_state,
+   dc_get_eject_state,
+   dc_get_image_index,
+   dc_set_image_index,
+   dc_get_num_images,
+   dc_replace_image_index,
+   dc_add_image_index,
+   dc_set_initial_image,
+   dc_get_image_path,
+   dc_get_image_label,
 };
 
 bool retro_load_game(const struct retro_game_info *info)
@@ -1144,7 +1191,16 @@ bool retro_load_game(const struct retro_game_info *info)
    struct retro_audio_callback audio_cb = { audio_callback, audio_set_state };
    use_audio_cb = environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK, &audio_cb);
 
-   environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &disk_control_cb);
+   // Negotiate the newer EXT disk-control interface (adds set_initial_image/
+   // get_image_path/get_image_label) if the frontend supports it, matching
+   // cap32's own negotiation pattern; fall back to the base interface
+   // (same underlying callbacks minus those three) otherwise.
+   unsigned disk_control_version = 0;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_DISK_CONTROL_INTERFACE_VERSION, &disk_control_version) &&
+       disk_control_version >= 1)
+      environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE, &disk_control_ext_cb);
+   else
+      environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &disk_control_cb);
    disk_images_.clear();
    current_disk_index_ = 0;
    disk_ejected_ = false;
