@@ -375,28 +375,24 @@ int LoadCprFromBuffer(unsigned char* buffer, int size)
    return 0;
 }
 
+static void ApplyMachineType(const char* model);
+
 void retro_init(void)
 {
-   // Phase 1: boot a plain (non-Plus) CPC 6128 through the real EmulatorEngine/
-   // MachineSettings facade instead of hand-configuring Motherboard directly --
-   // this is what makes model selection (464/664/6128/Plus/GX4000) a config
-   // change instead of a rewrite. GX4000/Plus boot (the embedded-cartridge
-   // path below) still goes through the old direct-Motherboard path for now;
-   // unifying the two is follow-up work once this path is proven.
+   // Phase 1: boot through the real EmulatorEngine/MachineSettings facade
+   // instead of hand-configuring Motherboard directly -- this is what makes
+   // model selection (464/664/6128 so far; Plus/GX4000 not yet -- see
+   // ApplyMachineType) a config change instead of a rewrite. GX4000/Plus boot
+   // (the embedded-cartridge path below) still goes through the old
+   // direct-Motherboard path for now; unifying the two is follow-up work.
    emulator_ = new EmulatorEngine();
    emulator_->SetDirectories(&directories_);
    emulator_->SetConfigurationManager(&conf_manager_);
    emulator_->Init(&display_, nullptr);
 
-   machine_settings_.SetHardwareType(MachineSettings::OLD_6128);
-   machine_settings_.SetRamCfg(MachineSettings::M128_K);
-   machine_settings_.SetLowerRom("cpc6128_os_uk.rom");
-   machine_settings_.SetUpperRom(0, "cpc6128_basic_uk.rom");
-   machine_settings_.SetCRTCType(CRTC::AMS40226);
-   machine_settings_.SetTapePlugged(true);
-   machine_settings_.SetFDCPlugged(true);
-   machine_settings_.SetPALPlugged(true);
-   emulator_->ChangeSettings(&machine_settings_); // calls UpdateComputer() internally
+   struct retro_variable var = { "amstradcpc_model", nullptr };
+   environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var);
+   ApplyMachineType(var.value ? var.value : "6128");
 
    motherboard_ = emulator_->GetMotherboard();
    motherboard_->GetPSG()->InitSound(nullptr);
@@ -469,9 +465,12 @@ void retro_set_environment(retro_environment_t cb)
    static const struct retro_variable vars[] = {
       { "test_aspect", "Aspect Ratio; 4:3|16:9" },
       { "test_samplerate", "Sample Rate; 30000|20000" },
-      { "test_opt0", "Test option #0; false|true" },
-      { "test_opt1", "Test option #1; 0" },
-      { "test_opt2", "Test option #2; 0|1|foo|3" },
+      // Plus/GX4000 aren't wired through this option yet -- they still boot
+      // via the embedded/loaded-cartridge path (see retro_load_game). Model
+      // switch takes effect immediately (no restart needed): ApplyMachineType()
+      // is called both here at load and from check_variables() on
+      // RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.
+      { "amstradcpc_model", "CPC Model; 6128|664|464" },
       { NULL, NULL },
    };
 
@@ -646,18 +645,67 @@ static void update_input(void)
 
 
 
+// Bundled ROM filenames under <system_directory>/amstradcpc/ROM/ -- see
+// RetroDirectories above. A user's own dumps of the same name override the
+// bundled default; that's the whole point of routing this through
+// IDirectories/GetBaseDirectory() instead of embedding these too.
+static std::string last_applied_model_;
+
+static void ApplyMachineType(const char* model)
+{
+   if (model == nullptr || last_applied_model_ == model)
+      return;
+   last_applied_model_ = model;
+
+   MachineSettings::HardwareType hw;
+   const char* lower_rom;
+   const char* upper_rom;
+   MachineSettings::RamCfg ram;
+
+   if (!strcmp(model, "664"))
+   {
+      hw = MachineSettings::OLD_664;
+      lower_rom = "cpc664_os_uk.rom";
+      upper_rom = "cpc664_basic_uk.rom";
+      ram = MachineSettings::M64_K;
+   }
+   else if (!strcmp(model, "464"))
+   {
+      hw = MachineSettings::OLD_464;
+      lower_rom = "cpc464_os_uk.rom";
+      upper_rom = "cpc464_basic_uk.rom";
+      ram = MachineSettings::M64_K;
+   }
+   else // "6128", and the fallback for anything unrecognised
+   {
+      hw = MachineSettings::OLD_6128;
+      lower_rom = "cpc6128_os_uk.rom";
+      upper_rom = "cpc6128_basic_uk.rom";
+      ram = MachineSettings::M128_K;
+   }
+
+   machine_settings_.SetHardwareType(hw);
+   machine_settings_.SetRamCfg(ram);
+   // SetLowerRom/SetUpperRom take non-const char* (see MachineSettings.h) but
+   // only ever read from it here -- const_cast is safe, not UB, since these
+   // string literals are never written through.
+   machine_settings_.SetLowerRom(const_cast<char*>(lower_rom));
+   machine_settings_.SetUpperRom(0, upper_rom);
+   machine_settings_.SetCRTCType(CRTC::AMS40226);
+   machine_settings_.SetTapePlugged(true);
+   machine_settings_.SetFDCPlugged(true);
+   machine_settings_.SetPALPlugged(true);
+
+   if (emulator_ != nullptr)
+      emulator_->ChangeSettings(&machine_settings_); // calls UpdateComputer()
+}
+
 static void check_variables(void)
 {
    struct retro_variable var = { 0 };
-   var.key = "test_opt0";
+   var.key = "amstradcpc_model";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      log_cb(RETRO_LOG_INFO, "Key -> Val: %s -> %s.\n", var.key, var.value);
-   var.key = "test_opt1";
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      log_cb(RETRO_LOG_INFO, "Key -> Val: %s -> %s.\n", var.key, var.value);
-   var.key = "test_opt2";
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      log_cb(RETRO_LOG_INFO, "Key -> Val: %s -> %s.\n", var.key, var.value);
+      ApplyMachineType(var.value);
 
    float last = last_aspect;
    float last_rate = last_sample_rate;
