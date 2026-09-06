@@ -60,12 +60,13 @@ public:
    }
    virtual void StartSync(){};
    virtual void WaitVbl() {};
+   virtual void SyncOnFrame(bool set) {};
    virtual int* GetVideoBuffer(int y)
    {
       return &video_buffer[1024 * y*2];
    }
    virtual void Reset() {};
-   virtual void Screenshot() {};
+   virtual void Screenshot(const char* scr_path) {};
    virtual void ScreenshotEveryFrame(int bSetOn) {};
    virtual bool IsEveryFrameScreened() {
       return false;
@@ -110,6 +111,8 @@ public:
       gamepad_button_A_(false)
    {}
    virtual ~Keyboard() {}
+
+   virtual void ValidateKeyboardMap() {}
 
    virtual unsigned char GetKeyboardMap(int index)
    {
@@ -160,6 +163,31 @@ public:
 class ConfigurationManager : public IConfiguration
 {
 public:
+   // libretro has no on-disk config file of its own -- settings come from
+   // RETRO_ENVIRONMENT_GET_VARIABLE (core options). These are no-ops.
+   virtual void OpenFile(const char* config_file) {}
+   virtual void CloseFile() {}
+
+   // Section/key enumeration is for iterating an INI structure we don't
+   // maintain; empty enumeration is the correct "no sections" answer.
+   virtual const char* GetFirstSection() { return nullptr; }
+   virtual const char* GetNextSection() { return nullptr; }
+   virtual const char* GetFirstKey(const char* section) { return nullptr; }
+   virtual const char* GetNextKey() { return nullptr; }
+
+   virtual void SetConfiguration(const char* section, const char* cle, const char* valeur)
+   {
+      SetConfiguration(section, cle, valeur, nullptr);
+   }
+   virtual unsigned int GetConfiguration(const char* section, const char* cle, const char* default_value, char* out_buffer, unsigned int buffer_size)
+   {
+      return GetConfiguration(section, cle, default_value, out_buffer, buffer_size, nullptr);
+   }
+   virtual unsigned int GetConfigurationInt(const char* section, const char* cle, unsigned int default_value)
+   {
+      return GetConfigurationInt(section, cle, default_value, nullptr);
+   }
+
    virtual void SetConfiguration(const char* section, const char* cle, const char* valeur, const char* file)
    {
       struct retro_variable var;// = { var.key = "test_aspect" };
