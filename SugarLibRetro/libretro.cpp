@@ -522,14 +522,18 @@ void retro_set_environment(retro_environment_t cb)
    else
       log_cb = fallback_log;
 
+   // Real description -- the previous "Dummy Controller #1/#2"/"Augmented
+   // Joypad" entries were unedited libretro-common sample-core placeholder
+   // text, visible to real users in RetroArch's port-config UI. Only one
+   // joystick port is actually wired (row 9 of the CPC keyboard matrix,
+   // see kKeyMap/update_input above), matching real CPC hardware (one
+   // joystick port on the base machine).
    static const struct retro_controller_description controllers[] = {
-      { "Dummy Controller #1", RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0) },
-      { "Dummy Controller #2", RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 1) },
-      { "Augmented Joypad", RETRO_DEVICE_JOYPAD }, // Test overriding generic description in UI.
+      { "Amstrad CPC Joystick", RETRO_DEVICE_JOYPAD },
    };
 
    static const struct retro_controller_info ports[] = {
-      { controllers, 3 },
+      { controllers, 1 },
       { NULL, 0 },
    };
 
@@ -1004,11 +1008,16 @@ static struct retro_disk_control_callback disk_control_cb = {
 
 bool retro_load_game(const struct retro_game_info *info)
 {
+   // Matches what update_input() actually reads (RETRO_DEVICE_ID_JOYPAD_
+   // UP/DOWN/LEFT/RIGHT/X/A -> CPC joystick row 9) -- the previous list was
+   // missing both fire buttons.
    struct retro_input_descriptor desc[] = {
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "Fire 1" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "Fire 2" },
       { 0 },
    };
 
@@ -1099,7 +1108,10 @@ void retro_unload_game(void)
 
 unsigned retro_get_region(void)
 {
-   return RETRO_REGION_NTSC;
+   // The Amstrad CPC is a European 50Hz machine (matches
+   // retro_get_system_av_info's info->timing.fps = 50.0) -- was reporting
+   // NTSC, leftover from the libretro-common sample core.
+   return RETRO_REGION_PAL;
 }
 
 bool retro_load_game_special(unsigned type, const struct retro_game_info *info, size_t num)

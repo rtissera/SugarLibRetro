@@ -1,11 +1,33 @@
+# Software Information
 display_name = "Sugarbox (SugarboxV2)"
 authors = "Thomas Guillemin|rtissera"
 supported_extensions = "cpr|dsk|edsk|ipf|ctr|raw|hfe|scp|m3u|cdt|tap|tzx|csw|voc|wav"
 corename = "Sugarbox"
-categories = "Emulator"
-systemname = "Amstrad CPC/CPC+/GX4000"
-manufacturer = "Amstrad"
 license = "MIT"
 permissions = ""
 display_version = "0.1"
+categories = "Emulator"
+
+# Hardware Information
+manufacturer = "Amstrad"
+systemname = "Amstrad CPC/CPC+/GX4000"
+systemid = "cpc"
+
+# Libretro Features
+database = "Amstrad - CPC|Amstrad - GX4000"
 supports_no_game = "true"
+savestate = "true"
+savestate_features = "serialized"
+cheats = "false"
+input_descriptors = "true"
+memory_descriptors = "false"
+libretro_saves = "false"
+core_options = "true"
+load_subsystem = "false"
+hw_render = "false"
+needs_fullpath = "true"
+disk_control = "true"
+is_experimental = "true"
+needs_kbd_mouse_focus = "true"
+
+description = "SugarboxV2/CPCCore-based Amstrad CPC/CPC+/GX4000 core. Emulates the 464, 664, 6128, 6128+ and GX4000 models, switchable at runtime with no restart. Unlike other libretro Amstrad CPC cores, this one supports protected/flux-level disk formats (IPF/CAPS, CTRAW, HFE, SCP) in addition to plain DSK/EDSK, as well as tape (.cdt/.tap/.tzx/.csw/.voc/.wav) and .cpr cartridges. Real keyboard input requires enabling RetroArch's Game Focus mode to type commands (RUN\"/CAT) needed to launch non-cartridge content."
