@@ -199,34 +199,29 @@ static const AutorunKey kAutorunKeys[] = {
    { '"', 8, 1, true  }, { '\r', 2, 2, false },
 };
 static const char kAutorunSequence[] = "RUN\"\r";
-enum AutorunState { AUTORUN_IDLE, AUTORUN_WAITING, AUTORUN_PRESS, AUTORUN_RELEASE, AUTORUN_DONE };
+enum AutorunState { AUTORUN_IDLE, AUTORUN_WAITING, AUTORUN_PRE_SHIFT, AUTORUN_PRESS, AUTORUN_POST_SHIFT, AUTORUN_RELEASE, AUTORUN_DONE };
 static AutorunState autorun_state_ = AUTORUN_IDLE;
 static int autorun_timer_ = 0;
 static unsigned autorun_char_index_ = 0;
 
 // ~2s at 50Hz before typing (mirrors CPCCoreEmu's own Paste() gate, which
 // waits for 2000ms of emulated time before considering the machine ready),
-// ~150ms per press and per release -- generous for the CPC's keyboard scan
-// rate, avoids a dropped keystroke.
-static void ArmAutorun() { autorun_state_ = AUTORUN_WAITING; autorun_timer_ = 100; autorun_char_index_ = 0; }
+// ~150ms per phase -- generous for the CPC's keyboard scan rate.
+static void ArmAutorun() { autorun_state_ = AUTORUN_WAITING; autorun_timer_ = 150; autorun_char_index_ = 0; }
 
 static void TickAutorun(unsigned char matrix[10])
 {
-   switch (autorun_state_)
-   {
-   case AUTORUN_IDLE:
-   case AUTORUN_DONE:
+   if (autorun_state_ == AUTORUN_IDLE || autorun_state_ == AUTORUN_DONE)
       return;
-   case AUTORUN_WAITING:
+
+   if (autorun_state_ == AUTORUN_WAITING)
+   {
       if (--autorun_timer_ <= 0)
       {
-         autorun_state_ = AUTORUN_PRESS;
-         autorun_timer_ = 8;
+         autorun_state_ = AUTORUN_PRE_SHIFT;
+         autorun_timer_ = 20;
       }
       return;
-   case AUTORUN_PRESS:
-   case AUTORUN_RELEASE:
-      break;
    }
 
    const char c = kAutorunSequence[autorun_char_index_];
@@ -247,20 +242,57 @@ static void TickAutorun(unsigned char matrix[10])
       return;
    }
 
-   if (autorun_state_ == AUTORUN_PRESS)
+   // Staggered phases so a shifted key produces two SEPARATE scan
+   // transitions (shift-alone, then the letter while shift is already
+   // stable) instead of both bits changing in the same instant. Found
+   // necessary empirically: a real screenshot showed the simultaneous
+   // shift+2 combo landing as a bare unshifted '2' (BASIC read "run2"),
+   // while single-key presses (R/U/N) worked once landing in the cached
+   // keyboard buffer at all (see the ForceKeyboardState -> GetKeyboardState
+   // fix above) -- the CPC's keyboard-scan/debounce logic appears to only
+   // register one new key-transition per scan.
+   //   unshifted key: PRE_SHIFT (skipped) -> PRESS (key) -> RELEASE (none)
+   //   shifted key:   PRE_SHIFT (shift) -> PRESS (shift+key) ->
+   //                  POST_SHIFT (shift only) -> RELEASE (none)
+   switch (autorun_state_)
    {
+   case AUTORUN_PRE_SHIFT:
+      if (!key->shift)
+      {
+         autorun_state_ = AUTORUN_PRESS;
+         autorun_timer_ = 20;
+         break;
+      }
+      matrix[2] &= ~(1 << 5);
+      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_PRESS; autorun_timer_ = 20; }
+      break;
+
+   case AUTORUN_PRESS:
       matrix[key->line] &= ~(1 << key->bit);
       if (key->shift) matrix[2] &= ~(1 << 5);
-      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_RELEASE; autorun_timer_ = 8; }
-   }
-   else // AUTORUN_RELEASE
-   {
+      if (--autorun_timer_ <= 0)
+      {
+         autorun_state_ = key->shift ? AUTORUN_POST_SHIFT : AUTORUN_RELEASE;
+         autorun_timer_ = 20;
+      }
+      break;
+
+   case AUTORUN_POST_SHIFT:
+      matrix[2] &= ~(1 << 5); // key released, shift still held
+      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_RELEASE; autorun_timer_ = 20; }
+      break;
+
+   case AUTORUN_RELEASE:
       if (--autorun_timer_ <= 0)
       {
          ++autorun_char_index_;
-         autorun_state_ = AUTORUN_PRESS;
-         autorun_timer_ = 8;
+         autorun_state_ = AUTORUN_PRE_SHIFT;
+         autorun_timer_ = 20;
       }
+      break;
+
+   default:
+      break;
    }
 }
 
@@ -782,7 +814,25 @@ static void update_input(void)
    memcpy(prev_matrix, matrix, sizeof(matrix));
 
    if (emulator_ != nullptr)
-      emulator_->GetKeyboardHandler()->ForceKeyboardState(matrix);
+   {
+      // ForceKeyboardState() writes the LIVE buffer (keyboard_lines_) the
+      // PSG reads -- but Monitor.cpp's ValidateKeyboardMap(), called once
+      // per VSync, unconditionally overwrites that live buffer FROM the
+      // CACHED one (keyboard_lines_cached_), which nothing else here ever
+      // touches (it only ever gets written by CharAction/SendScanCode,
+      // both dead paths for this core -- see the kAutorunKeys comment
+      // above). Since the CPC's own keyboard-scan interrupt is tied to
+      // the same VSync, a live-buffer write races that reset: whether a
+      // given frame's forced key survives long enough to be sampled
+      // depends on exact cycle alignment between this call and VSync,
+      // which is why autorun intermittently dropped characters (verified
+      // by screenshotting real BASIC output: RUN" typed as "un", losing R
+      // and the shift+2 quote combo, while U/N/Enter landed). Writing
+      // into the cached buffer instead means ValidateKeyboardMap() carries
+      // this frame's state into the live buffer at the next VSync and it
+      // stays there until we write the next frame's state -- no race.
+      memcpy(emulator_->GetKeyboardHandler()->GetKeyboardState(), matrix, 10);
+   }
 
    if (rumble.set_rumble_state)
    {
