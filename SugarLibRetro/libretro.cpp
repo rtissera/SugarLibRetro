@@ -854,6 +854,7 @@ static RetroDirectories directories_;
 static MachineSettings machine_settings_;
 static RetroFdcNotify fdc_notify_;
 static bool autorun_enabled_ = true;
+static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
 static int crtc_type_option_ = -1;
@@ -1176,8 +1177,18 @@ static int mouse_rel_y;
 
 void retro_reset(void)
 {
+   // Was a no-op that only cleared two leftover sample-core cursor
+   // variables, so the frontend's Reset did nothing to the emulated
+   // machine at all. EmulatorEngine::Reset()/ResetPlus() are the real
+   // ones; the Plus/GX4000 ASIC needs its own reset path.
    x_coord = 0;
    y_coord = 0;
+   if (emulator_ == nullptr)
+      return;
+   if (last_applied_model_ == "plus6128" || last_applied_model_ == "gx4000")
+      emulator_->ResetPlus();
+   else
+      emulator_->Reset();
 }
 
 static void update_input(void)
@@ -1371,7 +1382,6 @@ static void update_input(void)
 // RetroDirectories above. A user's own dumps of the same name override the
 // bundled default; that's the whole point of routing this through
 // IDirectories/GetBaseDirectory() instead of embedding these too.
-static std::string last_applied_model_;
 
 static void ApplyMachineType(const char* model)
 {
@@ -1804,6 +1814,26 @@ bool retro_load_game(const struct retro_game_info *info)
       environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_EXT_INTERFACE, &disk_control_ext_cb);
    else
       environ_cb(RETRO_ENVIRONMENT_SET_DISK_CONTROL_INTERFACE, &disk_control_cb);
+
+   // Publish the base RAM bank as a memory map as well as through
+   // retro_get_memory_data(). RetroArch's cheat search, memory viewer and
+   // READ_CORE_MEMORY all go through the MAP, not the plain accessor --
+   // without this they report "no memory map defined" even when
+   // retro_get_memory_data() is implemented.
+   if (emulator_ != nullptr && emulator_->GetMem() != nullptr)
+   {
+      static struct retro_memory_descriptor mem_desc[1];
+      memset(mem_desc, 0, sizeof(mem_desc));
+      mem_desc[0].flags = RETRO_MEMDESC_SYSTEM_RAM;
+      mem_desc[0].ptr = emulator_->GetMem()->GetRamBuffer();
+      mem_desc[0].start = 0x0000;
+      mem_desc[0].len = 64 * 1024;
+      mem_desc[0].addrspace = "RAM";
+      static struct retro_memory_map mem_map;
+      mem_map.descriptors = mem_desc;
+      mem_map.num_descriptors = 1;
+      environ_cb(RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mem_map);
+   }
    disk_images_.clear();
    current_disk_index_ = 0;
    disk_ejected_ = false;
@@ -1898,9 +1928,21 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info *info, 
 // libretro buffer (and the reverse for unserialize). Not zero-copy, but a
 // full CPC snapshot is a few hundred KB at most -- one extra file round
 // trip per save/load is not a meaningful cost.
+// The scratch file used to bounce a snapshot through EmulatorEngine's
+// file-based API. This used to live in the system directory, which is
+// routinely read-only on a real install (and is the wrong place for a
+// temp file regardless) -- save states would simply fail there. Prefer the
+// frontend's save directory, fall back to the system directory, then /tmp.
 static std::string GetScratchSnapshotPath()
 {
-   return std::string(directories_.GetBaseDirectory()) + "/savestate.tmp.sna";
+   const char* dir = nullptr;
+   if (!environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || dir == nullptr || *dir == '\0')
+   {
+      dir = directories_.GetBaseDirectory();
+      if (dir == nullptr || *dir == '\0')
+         dir = "/tmp";
+   }
+   return std::string(dir) + "/sugarbox_savestate.tmp.sna";
 }
 
 // EmulatorEngine::SaveSnapshot() does NOT write synchronously -- it just
@@ -2010,16 +2052,25 @@ bool retro_unserialize(const void *data_, size_t size)
    return ok;
 }
 
+// Base 64K of RAM, via Memory::GetRamBuffer() (a public accessor -- an
+// earlier reading of this class wrongly concluded the RAM was reachable
+// only through private members). Exposing it lets RetroArch's cheat
+// system and RetroAchievements see the machine's memory; both incumbent
+// CPC cores are weak here. The CPC's RAM is bank-switched and a 6128 has
+// 128K, so this is deliberately just the base bank -- the contiguous
+// region tools expect -- not the expansion banks.
 void *retro_get_memory_data(unsigned id)
 {
-   (void)id;
-   return NULL;
+   if (id != RETRO_MEMORY_SYSTEM_RAM || emulator_ == nullptr)
+      return NULL;
+   return emulator_->GetMem()->GetRamBuffer();
 }
 
 size_t retro_get_memory_size(unsigned id)
 {
-   (void)id;
-   return 0;
+   if (id != RETRO_MEMORY_SYSTEM_RAM || emulator_ == nullptr)
+      return 0;
+   return 64 * 1024;
 }
 
 void retro_cheat_reset(void)
