@@ -668,15 +668,15 @@ static void ApplyMachineType(const char* model)
    if (!strcmp(model, "664"))
    {
       hw = MachineSettings::OLD_664;
-      lower_rom = "cpc664_os_uk.rom";
-      upper_rom = "cpc664_basic_uk.rom";
+      lower_rom = "os664.rom";
+      upper_rom = "basic664.rom";
       ram = MachineSettings::M64_K;
    }
    else if (!strcmp(model, "464"))
    {
       hw = MachineSettings::OLD_464;
-      lower_rom = "cpc464_os_uk.rom";
-      upper_rom = "cpc464_basic_uk.rom";
+      lower_rom = "os464.rom";
+      upper_rom = "basic464.rom";
       ram = MachineSettings::M64_K;
    }
    else if (!strcmp(model, "gx4000"))
@@ -685,35 +685,38 @@ static void ApplyMachineType(const char* model)
       // drive, no tape deck. Same cartridge-plus-ROM boot as plus6128, but
       // tape/FDC are correctly absent -- RunFullSpeed() dispatches to a
       // different StartOptimizedPlus<...> instantiation based on these
-      // flags, so this isn't just cosmetic. Same placeholder-ROM caveat as
-      // plus6128 below.
+      // flags, so this isn't just cosmetic.
       hw = MachineSettings::GX400;
-      lower_rom = "cpc6128_os_uk.rom";
-      upper_rom = "cpc6128_basic_uk.rom";
+      lower_rom = "os6128.rom";
+      upper_rom = "basic6128.rom";
       ram = MachineSettings::M64_K;
       tape_plugged = false;
       fdc_plugged = false;
-      cartridge_file = "plus_en.cpr";
+      cartridge_file = "system.cpr";
    }
    else if (!strcmp(model, "plus6128"))
    {
-      // Real Plus hardware runs an ASIC-aware OS that differs from a plain
-      // 6128's -- CPCCore's test assets don't have a dumped Plus-specific
-      // lower/upper ROM pair, so this reuses the plain 6128 UK set as a
-      // placeholder. Whether the plain OS is "good enough" or visibly wrong
-      // is unverified -- this build has no display, only "boots and runs
-      // without crashing" is checked here.
+      // Plus/GX4000 hardware has no separate "Plus OS" ROM: the ASIC's
+      // extensions live entirely in the system cartridge (system.cpr,
+      // below), and the plain lower/upper ROM banks stay backward-compatible
+      // with a standard 6128's OS+BASIC. Confirmed against Abdess/retrobios
+      // (github.com/Abdess/retrobios/tree/main/bios/Amstrad/CPC, a
+      // source-verified BIOS collection cross-checked against emulator
+      // source): it ships no Plus-specific os/basic pair either, only the
+      // same os6128.rom/basic6128.rom plus one shared system.cpr for both
+      // Plus and GX4000 -- which is byte-identical to the plus_en.cpr this
+      // repo already had from CPCCore's own test assets.
       hw = MachineSettings::PLUS_6128;
-      lower_rom = "cpc6128_os_uk.rom";
-      upper_rom = "cpc6128_basic_uk.rom";
+      lower_rom = "os6128.rom";
+      upper_rom = "basic6128.rom";
       ram = MachineSettings::M128_K;
-      cartridge_file = "plus_en.cpr";
+      cartridge_file = "system.cpr";
    }
    else // "6128", and the fallback for anything unrecognised
    {
       hw = MachineSettings::OLD_6128;
-      lower_rom = "cpc6128_os_uk.rom";
-      upper_rom = "cpc6128_basic_uk.rom";
+      lower_rom = "os6128.rom";
+      upper_rom = "basic6128.rom";
       ram = MachineSettings::M128_K;
    }
 
