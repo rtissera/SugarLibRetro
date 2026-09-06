@@ -470,7 +470,7 @@ void retro_set_environment(retro_environment_t cb)
       // switch takes effect immediately (no restart needed): ApplyMachineType()
       // is called both here at load and from check_variables() on
       // RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.
-      { "amstradcpc_model", "CPC Model; 6128|664|464|plus6128" },
+      { "amstradcpc_model", "CPC Model; 6128|664|464|plus6128|gx4000" },
       { NULL, NULL },
    };
 
@@ -661,7 +661,9 @@ static void ApplyMachineType(const char* model)
    const char* lower_rom;
    const char* upper_rom;
    MachineSettings::RamCfg ram;
-   bool is_plus = false;
+   bool tape_plugged = true;
+   bool fdc_plugged = true;
+   const char* cartridge_file = nullptr; // non-null => Plus/GX4000-style cartridge boot
 
    if (!strcmp(model, "664"))
    {
@@ -677,22 +679,35 @@ static void ApplyMachineType(const char* model)
       upper_rom = "cpc464_basic_uk.rom";
       ram = MachineSettings::M64_K;
    }
+   else if (!strcmp(model, "gx4000"))
+   {
+      // GX4000 is a games console, not a computer: no keyboard, no disk
+      // drive, no tape deck. Same cartridge-plus-ROM boot as plus6128, but
+      // tape/FDC are correctly absent -- RunFullSpeed() dispatches to a
+      // different StartOptimizedPlus<...> instantiation based on these
+      // flags, so this isn't just cosmetic. Same placeholder-ROM caveat as
+      // plus6128 below.
+      hw = MachineSettings::GX400;
+      lower_rom = "cpc6128_os_uk.rom";
+      upper_rom = "cpc6128_basic_uk.rom";
+      ram = MachineSettings::M64_K;
+      tape_plugged = false;
+      fdc_plugged = false;
+      cartridge_file = "plus_en.cpr";
+   }
    else if (!strcmp(model, "plus6128"))
    {
       // Real Plus hardware runs an ASIC-aware OS that differs from a plain
       // 6128's -- CPCCore's test assets don't have a dumped Plus-specific
       // lower/upper ROM pair, so this reuses the plain 6128 UK set as a
-      // placeholder. UpdateComputer() (called via ChangeSettings() below)
-      // still loads it for Plus hardware types before separately loading the
-      // default cartridge (a completely different memory region -- cartridge
-      // banks, not ROM banks; see LoadCprFromBuffer). Whether the plain OS is
-      // "good enough" or visibly wrong is unverified -- this build has no
-      // display, only "boots and runs without crashing" is checked here.
+      // placeholder. Whether the plain OS is "good enough" or visibly wrong
+      // is unverified -- this build has no display, only "boots and runs
+      // without crashing" is checked here.
       hw = MachineSettings::PLUS_6128;
       lower_rom = "cpc6128_os_uk.rom";
       upper_rom = "cpc6128_basic_uk.rom";
       ram = MachineSettings::M128_K;
-      is_plus = true;
+      cartridge_file = "plus_en.cpr";
    }
    else // "6128", and the fallback for anything unrecognised
    {
@@ -710,22 +725,31 @@ static void ApplyMachineType(const char* model)
    machine_settings_.SetLowerRom(const_cast<char*>(lower_rom));
    machine_settings_.SetUpperRom(0, upper_rom);
    machine_settings_.SetCRTCType(CRTC::AMS40226);
-   machine_settings_.SetTapePlugged(true);
-   machine_settings_.SetFDCPlugged(true);
+   machine_settings_.SetTapePlugged(tape_plugged);
+   machine_settings_.SetFDCPlugged(fdc_plugged);
    machine_settings_.SetPALPlugged(true);
 
-   if (is_plus)
+   std::string cart_path;
+   if (cartridge_file != nullptr)
    {
-      // LoadCpr() (called from UpdateComputer() for Plus hardware types)
-      // takes this as a plain fopen() path, unlike LoadRom() -- it does not
-      // join it with GetBaseDirectory() itself, so the full path has to be
-      // built here.
-      std::string cart_path = std::string(directories_.GetBaseDirectory()) + "/ROM/plus_en.cpr";
+      // LoadCpr() takes this as a plain fopen() path, unlike LoadRom() --
+      // it does not join it with GetBaseDirectory() itself, so the full
+      // path has to be built here.
+      cart_path = std::string(directories_.GetBaseDirectory()) + "/ROM/" + cartridge_file;
       machine_settings_.SetDefaultCartridge(cart_path.c_str());
    }
 
    if (emulator_ != nullptr)
+   {
       emulator_->ChangeSettings(&machine_settings_); // calls UpdateComputer()
+      // UpdateComputer() only auto-calls LoadCpr() for PLUS_6128/PLUS_464
+      // (see its hardware_type check in Machine.cpp) -- GX400 is not in that
+      // list, so load it explicitly here for every cartridge-booting model.
+      // Calling LoadCpr() a second time for Plus (already auto-loaded) is
+      // harmless -- it just re-reads the same banks.
+      if (!cart_path.empty())
+         emulator_->LoadCpr(cart_path.c_str());
+   }
 }
 
 static void check_variables(void)
