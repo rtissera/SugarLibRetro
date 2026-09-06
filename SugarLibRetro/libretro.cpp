@@ -449,7 +449,7 @@ void retro_get_system_info(struct retro_system_info *info)
    // Plus/GX4000 cartridge format (see LoadCprFromBuffer); the rest are disk
    // formats EmulatorEngine::LoadDisk() dispatches to CPCCoreEmu's own
    // FormatType* parsers for (FormatTypeDSK/EDSK/IPF/CTRAW/RAW/HFE/HFEv3/SCP).
-   info->valid_extensions = "cpr|dsk|edsk|ipf|ctr|raw|hfe|scp|m3u";
+   info->valid_extensions = "cpr|dsk|edsk|ipf|ctr|raw|hfe|scp|m3u|cdt|tap|tzx|csw|voc|wav";
 }
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
@@ -869,13 +869,40 @@ static std::vector<std::string> disk_images_;
 static unsigned current_disk_index_ = 0;
 static bool disk_ejected_ = false;
 
-static bool IsCartridgeFile(const char* path)
+static bool HasExtension(const char* path, const char* ext_no_dot)
 {
    const char* ext = strrchr(path, '.');
    if (ext == nullptr)
       return false;
-   return (ext[0] == '.' && (ext[1] == 'c' || ext[1] == 'C') &&
-           (ext[2] == 'p' || ext[2] == 'P') && (ext[3] == 'r' || ext[3] == 'R') && ext[4] == '\0');
+   ++ext; // skip the dot
+   size_t i = 0;
+   for (; ext[i] != '\0' && ext_no_dot[i] != '\0'; ++i)
+   {
+      char a = ext[i], b = ext_no_dot[i];
+      if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+      if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+      if (a != b)
+         return false;
+   }
+   return ext[i] == '\0' && ext_no_dot[i] == '\0';
+}
+
+static bool IsCartridgeFile(const char* path)
+{
+   return HasExtension(path, "cpr");
+}
+
+// CTape::InsertTape()'s magic-byte auto-detect covers ZXTape!/.tzx (which
+// .cdt files also are, just under a CPC-specific extension -- no special
+// case needed), CSW, WAV, and Creative Voice File; .tap has no distinct
+// magic header, so it's the one format the deferred loader (InsertTapeDelayed)
+// falls back to checking the extension for. This list only needs to match
+// what CTape can actually end up loading.
+static bool IsTapeFile(const char* path)
+{
+   return HasExtension(path, "cdt") || HasExtension(path, "tap") ||
+          HasExtension(path, "tzx") || HasExtension(path, "csw") ||
+          HasExtension(path, "voc") || HasExtension(path, "wav");
 }
 
 static bool dc_set_eject_state(bool ejected)
@@ -1006,6 +1033,15 @@ bool retro_load_game(const struct retro_game_info *info)
          motherboard_->InitStartOptimizedPlus();
          motherboard_->OnOff();
       }
+      else if (IsTapeFile(info->path))
+      {
+         // Tape, same no-reset reasoning as disk: EmulatorEngine::LoadTape()
+         // just queues it (CTape::InsertTape sets pending_tape_ and defers
+         // the actual format auto-detect/read to InsertTapeDelayed(), which
+         // fires on its own during normal emulation ticking) -- no manual
+         // "run one frame to process the deferred load" call needed here.
+         emulator_->LoadTape(info->path);
+      }
       else
       {
          // Disk: EmulatorEngine::LoadDisk() auto-detects the real format
@@ -1043,31 +1079,125 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info *info, 
    return retro_load_game(NULL);
 }
 
+// CSnapshot (Snapshot.h/.cpp) only exposes a file-path API
+// (SaveSnapshot/LoadSnapshot write/read a real .sna file) -- there is no
+// in-memory-buffer serializer to call directly, unlike LoadDisk/LoadTape.
+// libretro's retro_serialize/unserialize work against a caller-owned memory
+// buffer, so this bridges the two through a scratch file under the system
+// directory: SaveSnapshot() writes it, then its bytes get read back into the
+// libretro buffer (and the reverse for unserialize). Not zero-copy, but a
+// full CPC snapshot is a few hundred KB at most -- one extra file round
+// trip per save/load is not a meaningful cost.
+static std::string GetScratchSnapshotPath()
+{
+   return std::string(directories_.GetBaseDirectory()) + "/savestate.tmp.sna";
+}
+
+// EmulatorEngine::SaveSnapshot() does NOT write synchronously -- it just
+// arms a flag (do_snapshot_) and stops the Z80 on its next instruction-fetch
+// boundary; the real write happens inside HandleSnapshots(), which only runs
+// as part of RunFullSpeed(). So triggering a save means: delete any stale
+// file at this path first (SaveSnapshot()'s own "did it succeed" return
+// value only reflects "flag armed", not "file written" -- can't be used to
+// detect completion), call SaveSnapshot(), then keep ticking the emulator
+// until the file actually exists on disk. A Z80 fetch boundary happens
+// every few cycles, so this should resolve within the first RunFullSpeed()
+// call in practice; the iteration cap is just a safety net against a wedged
+// emulator, not the expected path.
+static bool RunUntilSnapshotWritten(const std::string& path)
+{
+   remove(path.c_str());
+   if (!emulator_->SaveSnapshot(path.c_str()))
+      return false;
+   for (int i = 0; i < 50; ++i)
+   {
+      FILE* probe = fopen(path.c_str(), "rb");
+      if (probe != nullptr)
+      {
+         fclose(probe);
+         return true;
+      }
+      emulator_->RunFullSpeed();
+   }
+   return false;
+}
+
 size_t retro_serialize_size(void)
 {
-   return 2;
+   if (emulator_ == nullptr)
+      return 0;
+   const std::string path = GetScratchSnapshotPath();
+   if (!RunUntilSnapshotWritten(path))
+      return 0;
+   FILE* f = fopen(path.c_str(), "rb");
+   if (f == nullptr)
+      return 0;
+   fseek(f, 0, SEEK_END);
+   const long size = ftell(f);
+   fclose(f);
+   remove(path.c_str());
+   // RetroArch queries this once and allocates a buffer of exactly this
+   // size for every later retro_serialize() call -- pad generously since a
+   // real save later (different game state, different tape/disk position)
+   // can legitimately produce a slightly larger .sna than this first probe.
+   return size > 0 ? (size_t)size + 4096 : 0;
 }
 
 bool retro_serialize(void *data_, size_t size)
 {
-   if (size < 2)
+   if (emulator_ == nullptr)
+      return false;
+   const std::string path = GetScratchSnapshotPath();
+   if (!RunUntilSnapshotWritten(path))
       return false;
 
-   uint8_t *data = (uint8_t *)data_;
-   data[0] = x_coord;
-   data[1] = y_coord;
-   return true;
+   FILE* f = fopen(path.c_str(), "rb");
+   if (f == nullptr)
+      return false;
+   fseek(f, 0, SEEK_END);
+   const long file_size = ftell(f);
+   rewind(f);
+
+   bool ok = false;
+   if (file_size > 0 && (size_t)file_size <= size)
+   {
+      const size_t read_bytes = fread(data_, 1, (size_t)file_size, f);
+      ok = (read_bytes == (size_t)file_size);
+      // Zero the rest so a shorter save doesn't leave stale bytes from a
+      // previous, larger one lying around in the frontend's buffer.
+      if (ok && (size_t)file_size < size)
+         memset((uint8_t*)data_ + file_size, 0, size - (size_t)file_size);
+   }
+   fclose(f);
+   remove(path.c_str());
+   return ok;
 }
 
 bool retro_unserialize(const void *data_, size_t size)
 {
-   if (size < 2)
+   if (emulator_ == nullptr || size == 0)
       return false;
+   const std::string path = GetScratchSnapshotPath();
 
-   const uint8_t *data = (const uint8_t *)data_;
-   x_coord = data[0] & 31;
-   y_coord = data[1] & 31;
-   return true;
+   FILE* f = fopen(path.c_str(), "wb");
+   if (f == nullptr)
+      return false;
+   const size_t written = fwrite(data_, 1, size, f);
+   fclose(f);
+   if (written != size)
+   {
+      remove(path.c_str());
+      return false;
+   }
+
+   // LoadSnapshotNow(), not LoadSnapshot(): the latter just queues the load
+   // for HandleSnapshots() to pick up on a later RunFullSpeed() tick (same
+   // deferred pattern as SaveSnapshot()); retro_unserialize's contract needs
+   // the state fully applied before it returns, so this needs the
+   // synchronous variant.
+   const bool ok = emulator_->LoadSnapshotNow(path.c_str());
+   remove(path.c_str());
+   return ok;
 }
 
 void *retro_get_memory_data(unsigned id)
