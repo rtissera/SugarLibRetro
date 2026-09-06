@@ -112,66 +112,67 @@ protected:
    unsigned int pitch_;
 };
 
-class Keyboard : public IKeyboardHandler
-{
-public:
-   Keyboard() :
-      gamepad_button_left_(false),
-      gamepad_button_right_(false),
-      gamepad_button_top_(false),
-      gamepad_button_bottom_(false),
-      gamepad_button_X_(false),
-      gamepad_button_A_(false)
-   {}
-   virtual ~Keyboard() {}
-
-   virtual void ValidateKeyboardMap() {}
-
-   virtual unsigned char GetKeyboardMap(int index)
-   {
-/*      if (index == 5)
-      {
-         unsigned char result = 0xFF;
-         // button 1
-         if (gamepad_state_.buttons & GamePadButtonStart)result &= ~0x80;
-         return result;
-      }*/
-      if (index == 9)
-      {
-         unsigned char result = 0xFF;
-         // button 1
-         if (gamepad_button_X_) result &= ~0x10;
-         // button 2
-         if (gamepad_button_A_) result &= ~0x20;
-         // buttons up
-         if (gamepad_button_top_) result &= ~0x1;
-         // buttons down
-         if (gamepad_button_bottom_) result &= ~0x2;
-         // buttons left
-         //if (gamepad_state_.buttons & GamePadButtonLeft) result &= ~0x4;
-         if ( gamepad_button_left_ ) result &= ~0x4;
-         // buttons right
-         if (gamepad_button_right_) result &= ~0x8;
-         
-         return result;
-      }
-
-      return 0xFF;
-   }
-   virtual void Init(bool* register_replaced)
-   {
-
-   }
-   virtual void ForceKeyboardState(unsigned char key_states[10])
-   {
-
-   }
-   bool gamepad_button_left_;
-   bool gamepad_button_right_;
-   bool gamepad_button_top_;
-   bool gamepad_button_bottom_;
-   bool gamepad_button_X_;
-   bool gamepad_button_A_;
+// Real input wiring.
+//
+// EmulatorEngine::GetKeyboardHandler() returns CPCCoreEmu's OWN native
+// KeyboardHandler (Machine.cpp: Motherboard's constructor is hardwired to
+// &keyboardhandler_, its internal member -- there is no way to inject a
+// different IKeyboardHandler). A prior "Keyboard : IKeyboardHandler" class
+// used to live here implementing that interface directly, ported forward
+// from Thomas's 2020 pre-EmulatorEngine prototype where the frontend built
+// its own Motherboard and could pass in a custom handler -- but nothing
+// ever constructs a Motherboard with it any more, so every gamepad_button_*
+// write into it went nowhere. Removed; real input goes through
+// KeyboardHandler::ForceKeyboardState(unsigned char[10]), which writes
+// directly into the live matrix the AY-3-8912 PSG polls each frame
+// (PSG.cpp: keyboard_handler_->GetKeyboardMap(line) on register 14 reads).
+//
+// CPC keyboard/joystick matrix (10 lines x 8 bits, bit=0 means pressed) --
+// row/bit assignments from CPCCoreEmu/Keyboards/101_keyboard_linux's own
+// comments, the canonical Amstrad CPC hardware matrix:
+//   line 0: CurUp CurRight CurDown F9 F6 F3 EnterNumpad F.Numpad
+//   line 1: CurLeft Copy F7 F8 F5 F1 F2 F0Numpad
+//   line 2: Clr [{ Return ]} F4 Shift `\ Ctrl
+//   line 3: ^(caret) =- @| P +; *: ?/ >,
+//   line 4: _0 )9 O I L K M <.
+//   line 5: (8 '7 U Y H J N Space
+//   line 6: &6 %5 R T G F B V
+//   line 7: $4 #3 E W S D C X
+//   line 8: !1 "2 Esc Q Tab A CapsLock Z
+//   line 9: Joy0Up Joy0Down Joy0Left Joy0Right Joy0Fire1 Joy0Fire2 unused Del
+struct KeyMapEntry { unsigned retrok; int line; int bit; };
+static const KeyMapEntry kKeyMap[] = {
+   { RETROK_UP,          0, 0 }, { RETROK_RIGHT,   0, 1 }, { RETROK_DOWN,   0, 2 },
+   { RETROK_F9,          0, 3 }, { RETROK_F6,      0, 4 }, { RETROK_F3,     0, 5 },
+   { RETROK_KP_ENTER,    0, 6 }, { RETROK_KP_PERIOD, 0, 7 },
+   { RETROK_LEFT,        1, 0 }, { RETROK_INSERT,  1, 1 }, { RETROK_F7,     1, 2 },
+   { RETROK_F8,          1, 3 }, { RETROK_F5,      1, 4 }, { RETROK_F1,     1, 5 },
+   { RETROK_F2,          1, 6 }, { RETROK_KP0,     1, 7 },
+   { RETROK_HOME,        2, 0 }, { RETROK_LEFTBRACKET, 2, 1 }, { RETROK_RETURN, 2, 2 },
+   { RETROK_RIGHTBRACKET, 2, 3 }, { RETROK_F4,     2, 4 },
+   { RETROK_LSHIFT,      2, 5 }, { RETROK_RSHIFT,  2, 5 },
+   { RETROK_BACKQUOTE,   2, 6 }, { RETROK_BACKSLASH, 2, 6 },
+   { RETROK_LCTRL,       2, 7 }, { RETROK_RCTRL,   2, 7 },
+   { RETROK_CARET,       3, 0 }, { RETROK_MINUS,   3, 1 }, { RETROK_EQUALS, 3, 1 },
+   { RETROK_AT,          3, 2 }, { RETROK_p,       3, 3 },
+   { RETROK_SEMICOLON,   3, 4 }, { RETROK_QUOTE,   3, 5 }, { RETROK_COLON, 3, 5 },
+   { RETROK_SLASH,       3, 6 }, { RETROK_COMMA,   3, 7 },
+   { RETROK_0,           4, 0 }, { RETROK_9,       4, 1 }, { RETROK_o,      4, 2 },
+   { RETROK_i,           4, 3 }, { RETROK_l,       4, 4 }, { RETROK_k,      4, 5 },
+   { RETROK_m,           4, 6 }, { RETROK_PERIOD,  4, 7 },
+   { RETROK_8,           5, 0 }, { RETROK_7,       5, 1 }, { RETROK_u,      5, 2 },
+   { RETROK_y,           5, 3 }, { RETROK_h,       5, 4 }, { RETROK_j,      5, 5 },
+   { RETROK_n,           5, 6 }, { RETROK_SPACE,   5, 7 },
+   { RETROK_6,           6, 0 }, { RETROK_5,       6, 1 }, { RETROK_r,      6, 2 },
+   { RETROK_t,           6, 3 }, { RETROK_g,       6, 4 }, { RETROK_f,      6, 5 },
+   { RETROK_b,           6, 6 }, { RETROK_v,       6, 7 },
+   { RETROK_4,           7, 0 }, { RETROK_3,       7, 1 }, { RETROK_e,      7, 2 },
+   { RETROK_w,           7, 3 }, { RETROK_s,       7, 4 }, { RETROK_d,      7, 5 },
+   { RETROK_c,           7, 6 }, { RETROK_x,       7, 7 },
+   { RETROK_1,           8, 0 }, { RETROK_2,       8, 1 }, { RETROK_ESCAPE, 8, 2 },
+   { RETROK_q,           8, 3 }, { RETROK_TAB,     8, 4 }, { RETROK_a,      8, 5 },
+   { RETROK_CAPSLOCK,    8, 6 }, { RETROK_z,       8, 7 },
+   { RETROK_BACKSPACE,   9, 7 }, { RETROK_DELETE,  9, 7 },
 };
 class ConfigurationManager : public IConfiguration
 {
@@ -203,7 +204,7 @@ public:
 
    virtual void SetConfiguration(const char* section, const char* cle, const char* valeur, const char* file)
    {
-      struct retro_variable var;// = { var.key = "test_aspect" };
+      struct retro_variable var;
       std::string key;
       key = section + std::string("_") + std::string(cle);
       var.key = key.c_str();
@@ -212,12 +213,21 @@ public:
    }
    virtual unsigned int GetConfiguration(const char* section, const char* cle, const char* default_value, char* out_buffer, unsigned int buffer_size, const char* file)
    {
-      if (section == nullptr ||cle == nullptr)
+      // file != nullptr means the caller wants a real on-disk INI (this is
+      // how KeyboardHandler::GetKeyValues() reads CONF/KeyboardMaps.ini for
+      // the CharPressed/CharReleased "paste text" feature) -- we don't have
+      // an INI parser wired up for that, and routing it through
+      // RETRO_ENVIRONMENT_GET_VARIABLE instead floods the log with
+      // "Invalid value" for every one of its ~600+ undeclared per-key
+      // lookups. Real-time key input (ForceKeyboardState, see kKeyMap
+      // above) doesn't go through this path at all, so this only affects
+      // paste-to-type, which just falls back to its documented default.
+      if (section == nullptr || cle == nullptr || file != nullptr)
       {
          strncpy(out_buffer, default_value, buffer_size);
          return true;
       }
-      struct retro_variable var;// = { var.key = "test_aspect" };
+      struct retro_variable var;
       std::string key;
       key = section + std::string("_") + std::string(cle);
       var.key = key.c_str();
@@ -230,18 +240,20 @@ public:
       {
          strncpy(out_buffer, default_value, buffer_size);
          return true;
-      }      
+      }
    }
    virtual unsigned int GetConfigurationInt(const char* section, const char* cle, unsigned int default_value, const char* file)
    {
-      struct retro_variable var;// = { var.key = "test_aspect" };
+      if (file != nullptr)
+         return default_value;
+      struct retro_variable var;
       std::string key;
       key = section + std::string("_") + std::string(cle);
       var.key = key.c_str();
       if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
       {
          return atoi(var.value);
-         
+
       }
       else
       {
@@ -307,7 +319,6 @@ static EmulatorEngine* emulator_ = nullptr;
 static Motherboard * motherboard_ = nullptr;
 static ConfigurationManager conf_manager_;
 static RetroDisplay display_;
-static Keyboard keyboard_;
 static RetroDirectories directories_;
 static MachineSettings machine_settings_;
 static RetroFdcNotify fdc_notify_;
@@ -401,12 +412,9 @@ static void ApplyMachineType(const char* model);
 
 void retro_init(void)
 {
-   // Phase 1: boot through the real EmulatorEngine/MachineSettings facade
-   // instead of hand-configuring Motherboard directly -- this is what makes
-   // model selection (464/664/6128 so far; Plus/GX4000 not yet -- see
-   // ApplyMachineType) a config change instead of a rewrite. GX4000/Plus boot
-   // (the embedded-cartridge path below) still goes through the old
-   // direct-Motherboard path for now; unifying the two is follow-up work.
+   // Boots through the real EmulatorEngine/MachineSettings facade -- model
+   // selection (464/664/6128/plus6128/gx4000, see ApplyMachineType) is a
+   // config change, not a rewrite.
    emulator_ = new EmulatorEngine();
    emulator_->SetDirectories(&directories_);
    emulator_->SetConfigurationManager(&conf_manager_);
@@ -455,7 +463,7 @@ void retro_get_system_info(struct retro_system_info *info)
 void retro_get_system_av_info(struct retro_system_av_info *info)
 {
    float aspect = 4.0f / 3.0f;
-   struct retro_variable var = { var.key = "test_aspect" };
+   struct retro_variable var = { "sugarbox_aspect_ratio", nullptr };
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       if (!strcmp(var.value, "4:3"))
@@ -465,7 +473,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    }
 
    float sampling_rate = 44100.0f;
-   var.key = "test_samplerate";
+   var.key = "sugarbox_sample_rate";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
       sampling_rate = strtof(var.value, NULL);
 
@@ -492,13 +500,11 @@ void retro_set_environment(retro_environment_t cb)
    environ_cb = cb;
 
    static const struct retro_variable vars[] = {
-      { "test_aspect", "Aspect Ratio; 4:3|16:9" },
-      { "test_samplerate", "Sample Rate; 30000|20000" },
-      // Plus/GX4000 aren't wired through this option yet -- they still boot
-      // via the embedded/loaded-cartridge path (see retro_load_game). Model
-      // switch takes effect immediately (no restart needed): ApplyMachineType()
-      // is called both here at load and from check_variables() on
-      // RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.
+      { "sugarbox_aspect_ratio", "Aspect Ratio; 4:3|16:9" },
+      { "sugarbox_sample_rate", "Sample Rate; 44100|48000|30000|20000" },
+      // Model switch takes effect immediately (no restart needed):
+      // ApplyMachineType() is called both here at load and from
+      // check_variables() on RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.
       { "amstradcpc_model", "CPC Model; 6128|664|464|plus6128|gx4000" },
       { NULL, NULL },
    };
@@ -588,13 +594,6 @@ static void update_input(void)
       dir_x++;
    button_X = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X);
    button_A = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A);
-   
-
-   if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_RETURN))
-      log_cb(RETRO_LOG_INFO, "Return key is pressed!\n");
-
-   if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, RETROK_x))
-      log_cb(RETRO_LOG_INFO, "x key is pressed!\n");
 
    int16_t mouse_x = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_X);
    int16_t mouse_y = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
@@ -640,16 +639,49 @@ static void update_input(void)
    dir_x += input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X) / 5000;
    dir_y += input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y) / 5000;
 
-   keyboard_.gamepad_button_left_ = dir_x > 0;
-   keyboard_.gamepad_button_right_ = dir_x < 0;
-   keyboard_.gamepad_button_top_ = dir_y > 0;
-   keyboard_.gamepad_button_bottom_ = dir_y < 0;
-
-   keyboard_.gamepad_button_X_ = button_X;
-   keyboard_.gamepad_button_A_ = button_A;
+   // dir_x>0/dir_y>0 mean RIGHT/DOWN were pressed (libretro convention,
+   // matches the ++ / -- above) -- map to the matching CPC joystick bit,
+   // not the opposite one (this was inverted on all 4 axes before).
+   const bool joy_left = dir_x < 0;
+   const bool joy_right = dir_x > 0;
+   const bool joy_up = dir_y < 0;
+   const bool joy_down = dir_y > 0;
 
    x_coord = (x_coord + dir_x) & 31;
    y_coord = (y_coord + dir_y) & 31;
+
+   // Real input wiring: build the full CPC 10-line keyboard/joystick matrix
+   // (bit=0 means pressed) and push it straight into CPCCoreEmu's own
+   // KeyboardHandler -- see the KeyMapEntry comment above for why this is
+   // the correct entry point (ForceKeyboardState, not a custom
+   // IKeyboardHandler, since Motherboard is hardwired to its internal one).
+   unsigned char matrix[10];
+   memset(matrix, 0xFF, sizeof(matrix));
+
+   // Joystick 0, row 9: up/down/left/right/fire1/fire2.
+   if (joy_up)    matrix[9] &= ~0x01;
+   if (joy_down)  matrix[9] &= ~0x02;
+   if (joy_left)  matrix[9] &= ~0x04;
+   if (joy_right) matrix[9] &= ~0x08;
+   if (button_X)  matrix[9] &= ~0x10;
+   if (button_A)  matrix[9] &= ~0x20;
+
+   for (size_t i = 0; i < sizeof(kKeyMap) / sizeof(kKeyMap[0]); ++i)
+   {
+      if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, kKeyMap[i].retrok))
+         matrix[kKeyMap[i].line] &= ~(1 << kKeyMap[i].bit);
+   }
+
+   static unsigned char prev_matrix[10] = { 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF };
+   for (int i = 0; i < 10; ++i)
+   {
+      if (matrix[i] != prev_matrix[i])
+         log_cb(RETRO_LOG_DEBUG, "CPC key matrix line %d: 0x%02X -> 0x%02X\n", i, prev_matrix[i], matrix[i]);
+   }
+   memcpy(prev_matrix, matrix, sizeof(matrix));
+
+   if (emulator_ != nullptr)
+      emulator_->GetKeyboardHandler()->ForceKeyboardState(matrix);
 
    if (rumble.set_rumble_state)
    {
