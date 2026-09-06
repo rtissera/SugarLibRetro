@@ -890,13 +890,17 @@ void retro_set_environment(retro_environment_t cb)
    // text, visible to real users in RetroArch's port-config UI. Only one
    // joystick port is actually wired (row 9 of the CPC keyboard matrix,
    // see kKeyMap/update_input above), matching real CPC hardware (one
-   // joystick port on the base machine).
+   // joystick port on the base machine). Lightgun ("Magnum Light Phaser"/
+   // GUNSTICK, real period-accurate CPC peripheral -- CRTC.cpp models the
+   // raster-beam hit detection, see EmulatorEngine::GunSet in update_input
+   // below) offered as an alternate device for the same port.
    static const struct retro_controller_description controllers[] = {
       { "Amstrad CPC Joystick", RETRO_DEVICE_JOYPAD },
+      { "Amstrad CPC Lightgun", RETRO_DEVICE_LIGHTGUN },
    };
 
    static const struct retro_controller_info ports[] = {
-      { controllers, 1 },
+      { controllers, 2 },
       { NULL, 0 },
    };
 
@@ -960,6 +964,43 @@ static void update_input(void)
       dir_x++;
    button_X = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X);
    button_A = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A);
+
+   // Lightgun (gap #10) -- real, period-accurate CPC hardware ("Magnum
+   // Light Phaser"/GUNSTICK): CRTC.cpp compares gun_x_/gun_y_ against the
+   // live raster beam position (monitor_->x_, monitor_->y_*2) each tick,
+   // exactly the standard lightgun emulation technique. gun_x_/gun_y_ are
+   // in the SAME raw coordinate space RetroDisplay::GetVideoBuffer()/VSync()
+   // already use (a 1024-wide internal buffer, row-doubled -- VSync crops
+   // the WIDTHxHEIGHT frame RetroArch actually displays starting at
+   // (OFFSET_X, OFFSET_Y) within it), so converting the frontend's
+   // normalized on-screen gun position back to that space is just adding
+   // the same offsets. SCREEN_X/Y are absolute positions in [-0x8000,
+   // 0x7FFF] over the displayed frame; IS_OFFSCREEN reports a shot pointed
+   // outside it (RELOAD gesture in most frontends).
+   //
+   // NOTE: unlike every other feature this session, this has NOT been
+   // verified against real lightgun-aware CPC software (none was
+   // available to test with) -- the coordinate math follows directly from
+   // reading CRTC.cpp's own comparison and RetroDisplay's existing crop
+   // offsets, but whether a shot lands correctly in an actual game is
+   // unconfirmed.
+   if (emulator_ != nullptr)
+   {
+      const bool gun_offscreen = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN);
+      if (gun_offscreen)
+      {
+         emulator_->GunSet(0, 0, 0);
+      }
+      else
+      {
+         const int16_t gun_x = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X);
+         const int16_t gun_y = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_Y);
+         const bool gun_trigger = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_TRIGGER);
+         const int displayed_x = ((int)gun_x + 0x8000) * WIDTH / 0x10000;
+         const int displayed_y = ((int)gun_y + 0x8000) * HEIGHT / 0x10000;
+         emulator_->GunSet(displayed_x + OFFSET_X, displayed_y + OFFSET_Y, gun_trigger ? 1 : 0);
+      }
+   }
 
    int16_t mouse_x = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_X);
    int16_t mouse_y = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_Y);
