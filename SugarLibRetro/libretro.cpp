@@ -155,12 +155,16 @@ static const KeyMapEntry kKeyMap[] = {
    { RETROK_LCTRL,       2, 7 }, { RETROK_RCTRL,   2, 7 },
    { RETROK_CARET,       3, 0 }, { RETROK_MINUS,   3, 1 }, { RETROK_EQUALS, 3, 1 },
    { RETROK_AT,          3, 2 }, { RETROK_p,       3, 3 },
-   { RETROK_SEMICOLON,   3, 4 }, { RETROK_QUOTE,   3, 5 }, { RETROK_COLON, 3, 5 },
+   { RETROK_SEMICOLON,   3, 4 }, { RETROK_COLON,   3, 5 },
    { RETROK_SLASH,       3, 6 }, { RETROK_COMMA,   3, 7 },
    { RETROK_0,           4, 0 }, { RETROK_9,       4, 1 }, { RETROK_o,      4, 2 },
    { RETROK_i,           4, 3 }, { RETROK_l,       4, 4 }, { RETROK_k,      4, 5 },
    { RETROK_m,           4, 6 }, { RETROK_PERIOD,  4, 7 },
-   { RETROK_8,           5, 0 }, { RETROK_7,       5, 1 }, { RETROK_u,      5, 2 },
+   // Row 3 bit 5 is the "*:" key (colon/asterisk), NOT quote -- the
+   // apostrophe/quote key is row 5 bit 1 ("'7", shift+7 on a real CPC).
+   // This was wrong in the original table (mapped RETROK_QUOTE to 3,5).
+   { RETROK_8,           5, 0 }, { RETROK_7,       5, 1 }, { RETROK_QUOTE, 5, 1 },
+   { RETROK_u,           5, 2 },
    { RETROK_y,           5, 3 }, { RETROK_h,       5, 4 }, { RETROK_j,      5, 5 },
    { RETROK_n,           5, 6 }, { RETROK_SPACE,   5, 7 },
    { RETROK_6,           6, 0 }, { RETROK_5,       6, 1 }, { RETROK_r,      6, 2 },
@@ -174,6 +178,92 @@ static const KeyMapEntry kKeyMap[] = {
    { RETROK_CAPSLOCK,    8, 6 }, { RETROK_z,       8, 7 },
    { RETROK_BACKSPACE,   9, 7 }, { RETROK_DELETE,  9, 7 },
 };
+
+// Autorun: types RUN" + Enter once, shortly after a fresh disk/tape load.
+// The CPC needs this to launch anything that isn't a .cpr cartridge -- real
+// hardware behavior (AMSDOS's RUN" with no filename loads/runs the first
+// program file on the disc), not something specific to this core.
+//
+// This does NOT use EmulatorEngine::Paste()/CharPressed() -- that path
+// resolves typed characters against KeyboardHandler::keyboard_map_, which
+// is only ever populated from CONF/KeyboardMaps.ini via
+// ConfigurationManager, and that path was deliberately stubbed to return
+// sentinel defaults (see ConfigurationManager::GetConfiguration* above) to
+// silence log spam from ~600 undeclared per-key lookups -- so
+// keyboard_map_ has no real char associations and Paste() would silently
+// do nothing. Instead this drives the same matrix update_input() already
+// writes each frame via ForceKeyboardState(), which is proven working.
+struct AutorunKey { char c; int line; int bit; bool shift; };
+static const AutorunKey kAutorunKeys[] = {
+   { 'R', 6, 2, false }, { 'U', 5, 2, false }, { 'N', 5, 6, false },
+   { '"', 8, 1, true  }, { '\r', 2, 2, false },
+};
+static const char kAutorunSequence[] = "RUN\"\r";
+enum AutorunState { AUTORUN_IDLE, AUTORUN_WAITING, AUTORUN_PRESS, AUTORUN_RELEASE, AUTORUN_DONE };
+static AutorunState autorun_state_ = AUTORUN_IDLE;
+static int autorun_timer_ = 0;
+static unsigned autorun_char_index_ = 0;
+
+// ~2s at 50Hz before typing (mirrors CPCCoreEmu's own Paste() gate, which
+// waits for 2000ms of emulated time before considering the machine ready),
+// ~150ms per press and per release -- generous for the CPC's keyboard scan
+// rate, avoids a dropped keystroke.
+static void ArmAutorun() { autorun_state_ = AUTORUN_WAITING; autorun_timer_ = 100; autorun_char_index_ = 0; }
+
+static void TickAutorun(unsigned char matrix[10])
+{
+   switch (autorun_state_)
+   {
+   case AUTORUN_IDLE:
+   case AUTORUN_DONE:
+      return;
+   case AUTORUN_WAITING:
+      if (--autorun_timer_ <= 0)
+      {
+         autorun_state_ = AUTORUN_PRESS;
+         autorun_timer_ = 8;
+      }
+      return;
+   case AUTORUN_PRESS:
+   case AUTORUN_RELEASE:
+      break;
+   }
+
+   const char c = kAutorunSequence[autorun_char_index_];
+   if (c == '\0')
+   {
+      autorun_state_ = AUTORUN_DONE;
+      return;
+   }
+
+   const AutorunKey* key = nullptr;
+   for (size_t i = 0; i < sizeof(kAutorunKeys) / sizeof(kAutorunKeys[0]); ++i)
+   {
+      if (kAutorunKeys[i].c == c) { key = &kAutorunKeys[i]; break; }
+   }
+   if (key == nullptr)
+   {
+      ++autorun_char_index_;
+      return;
+   }
+
+   if (autorun_state_ == AUTORUN_PRESS)
+   {
+      matrix[key->line] &= ~(1 << key->bit);
+      if (key->shift) matrix[2] &= ~(1 << 5);
+      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_RELEASE; autorun_timer_ = 8; }
+   }
+   else // AUTORUN_RELEASE
+   {
+      if (--autorun_timer_ <= 0)
+      {
+         ++autorun_char_index_;
+         autorun_state_ = AUTORUN_PRESS;
+         autorun_timer_ = 8;
+      }
+   }
+}
+
 class ConfigurationManager : public IConfiguration
 {
 public:
@@ -506,6 +596,11 @@ void retro_set_environment(retro_environment_t cb)
       // ApplyMachineType() is called both here at load and from
       // check_variables() on RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.
       { "amstradcpc_model", "CPC Model; 6128|664|464|plus6128|gx4000" },
+      // The CPC needs a typed RUN"/CAT to launch anything that isn't a
+      // .cpr cartridge (real hardware behavior, not an emulator quirk) --
+      // this automatically types RUN" + Enter once, ~2s after a fresh
+      // disk/tape load, matching cap32's own cap32_autorun option.
+      { "sugarbox_autorun", "Autorun disk/tape; enabled|disabled" },
       { NULL, NULL },
    };
 
@@ -676,6 +771,8 @@ static void update_input(void)
          matrix[kKeyMap[i].line] &= ~(1 << kKeyMap[i].bit);
    }
 
+   TickAutorun(matrix);
+
    static unsigned char prev_matrix[10] = { 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF };
    for (int i = 0; i < 10; ++i)
    {
@@ -820,12 +917,19 @@ static void ApplyMachineType(const char* model)
    }
 }
 
+static bool autorun_enabled_ = true;
+
 static void check_variables(void)
 {
    struct retro_variable var = { 0 };
    var.key = "amstradcpc_model";
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
       ApplyMachineType(var.value);
+
+   var.key = "sugarbox_autorun";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      autorun_enabled_ = (strcmp(var.value, "enabled") == 0);
 
    float last = last_aspect;
    float last_rate = last_sample_rate;
@@ -1082,6 +1186,7 @@ bool retro_load_game(const struct retro_game_info *info)
          // fires on its own during normal emulation ticking) -- no manual
          // "run one frame to process the deferred load" call needed here.
          emulator_->LoadTape(info->path);
+         if (autorun_enabled_) ArmAutorun();
       }
       else
       {
@@ -1094,6 +1199,7 @@ bool retro_load_game(const struct retro_game_info *info)
          // entries.
          disk_images_.push_back(info->path);
          emulator_->LoadDisk(info->path, 0);
+         if (autorun_enabled_) ArmAutorun();
       }
    }
 
