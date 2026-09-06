@@ -52,14 +52,23 @@ static retro_input_state_t input_state_cb;
 class RetroDisplay : public IDisplay
 {
 public:
+   // Monitor type (gap #9a). The real CPC shipped with either the CTM644
+   // colour monitor or the GT65 green-phosphor monochrome one, and a lot of
+   // period software was designed against the latter.
+   enum MonitorType { MONITOR_COLOR = 0, MONITOR_GREEN, MONITOR_AMBER };
+
    RetroDisplay()
    {
       // Init
       video_buffer = new int[1024 * 1024];
       memset(video_buffer, 0, 1024 * 1024 * sizeof(int));
+      mono_buffer_ = new int[WIDTH * HEIGHT];
+      memset(mono_buffer_, 0, WIDTH * HEIGHT * sizeof(int));
       pitch_ = 1024 * sizeof(unsigned int);
    };
-   virtual ~RetroDisplay() {};
+   virtual ~RetroDisplay() { delete[] mono_buffer_; };
+
+   void SetMonitorType(MonitorType type) { monitor_type_ = type; }
 
    virtual void SetScanlines(int scan) {};
    virtual void Display() {};
@@ -70,7 +79,53 @@ public:
    virtual int GetHeight() { return HEIGHT; };
    virtual void VSync(bool bDbg)
    {
-      video_cb(&video_buffer[OFFSET_X  + 1024*OFFSET_Y], WIDTH, HEIGHT, pitch_);
+      const int* src = &video_buffer[OFFSET_X + 1024 * OFFSET_Y];
+      if (monitor_type_ == MONITOR_COLOR)
+      {
+         video_cb(src, WIDTH, HEIGHT, pitch_);
+         return;
+      }
+
+      // Monochrome monitor emulation, done here on the finished frame
+      // rather than by overriding IDisplay::ConvertRGB(). ConvertRGB() is
+      // only consulted when GateArray::SetMonitor() builds the classic
+      // gate-array palette (VGA.cpp) -- the Plus/ASIC path writes
+      // ink_list_ directly as packed RGB (Memory::UpdateAsicPalette in
+      // Memoire.cpp) and never goes through it, so a palette-level hook
+      // would silently do nothing on 6128+/GX4000. Converting the frame
+      // covers every model. Writes to a separate buffer: the emulator's
+      // own frame buffer persists across frames, so an in-place conversion
+      // would compound every frame.
+      //
+      // Rec.601 luma, tinted to the phosphor colour.
+      for (int y = 0; y < HEIGHT; ++y)
+      {
+         const int* in = src + 1024 * y;
+         int* out = mono_buffer_ + WIDTH * y;
+         for (int x = 0; x < WIDTH; ++x)
+         {
+            const unsigned int p = (unsigned int)in[x];
+            const unsigned int r = (p >> 16) & 0xFF;
+            const unsigned int g = (p >> 8) & 0xFF;
+            const unsigned int b = p & 0xFF;
+            const unsigned int luma = (77 * r + 150 * g + 29 * b) >> 8;
+            unsigned int outr, outg, outb;
+            if (monitor_type_ == MONITOR_GREEN)
+            {
+               outr = (luma * 40) >> 8;
+               outg = luma;
+               outb = (luma * 40) >> 8;
+            }
+            else // MONITOR_AMBER
+            {
+               outr = luma;
+               outg = (luma * 190) >> 8;
+               outb = (luma * 25) >> 8;
+            }
+            out[x] = (int)(0xFF000000u | (outr << 16) | (outg << 8) | outb);
+         }
+      }
+      video_cb(mono_buffer_, WIDTH, HEIGHT, WIDTH * sizeof(unsigned int));
    }
    virtual void StartSync(){};
    virtual void WaitVbl() {};
@@ -110,6 +165,8 @@ public:
 
 protected:
    int * video_buffer;
+   int * mono_buffer_ = nullptr;
+   MonitorType monitor_type_ = MONITOR_COLOR;
    unsigned int pitch_;
 };
 
@@ -1037,6 +1094,9 @@ void retro_set_environment(retro_environment_t cb)
       // Host keyboard layout. Only affects which CPC key a physical host
       // key presses -- see kKeyMapOverridesFR.
       { "sugarbox_keyboard_layout", "Host keyboard layout; uk|fr" },
+      // "green" is the authentic GT65 monochrome monitor the CPC shipped
+      // with alongside the CTM644 colour one; amber is a convenience.
+      { "sugarbox_monitor", "Monitor; color|green|amber" },
       { NULL, NULL },
    };
 
@@ -1438,6 +1498,15 @@ static void check_variables(void)
    var.key = "sugarbox_keyboard_layout";
    var.value = nullptr;
    ApplyKeyboardLayout((environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) ? var.value : "uk");
+
+   var.key = "sugarbox_monitor";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      display_.SetMonitorType(strcmp(var.value, "green") == 0 ? RetroDisplay::MONITOR_GREEN
+                            : strcmp(var.value, "amber") == 0 ? RetroDisplay::MONITOR_AMBER
+                            : RetroDisplay::MONITOR_COLOR);
+   }
 
    float last = last_aspect;
    float last_rate = last_sample_rate;
