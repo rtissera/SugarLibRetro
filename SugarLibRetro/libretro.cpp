@@ -26,6 +26,7 @@
 #include "libretro.h"
 #include <string>
 #include <vector>
+#include <mutex>
 
 //#define WIDTH  768
 #define WIDTH  640
@@ -413,9 +414,230 @@ private:
 
 static struct retro_log_callback logging;
 static retro_log_printf_t log_cb;
-static bool use_audio_cb;
 static float last_aspect;
 static float last_sample_rate;
+
+// ---------------------------------------------------------------------------
+// PSG audio bridge (was completely missing -- see below).
+//
+// EmulatorEngine::Init(IDisplay*, ISoundFactory*) -- the overload this file
+// calls -- takes a sound-factory-shaped parameter but never uses it (see its
+// body in Machine.cpp: display_ is stored, `sound` is not referenced at
+// all). The real hookup point is the separate EmulatorEngine::InitSound
+// (ISound*), which wires SoundMixer::Init(sound, GetTape()) -- this file
+// never called it, calling Motherboard::GetPSG()->InitSound(nullptr)
+// directly instead (bypassing EmulatorEngine's wrapper) with a null ISound.
+// Confirmed via a real audio capture (parecord on the actual PulseAudio
+// output while a game ran) that this produced zero audio output --
+// digital silence, not just "not forwarded to the frontend" -- for this
+// entire project prior to this fix.
+//
+// SoundMixer runs its own background thread once given a non-null ISound
+// (SoundMixer::Init -> PrepareBufferThread -> Loop(), gated on
+// `#ifndef NO_MULTITHREAD`, which is NOT defined for the real CPCCoreEmu.a
+// build -- removed from this file too, see the ODR-violation note above --
+// so this is genuinely concurrent). GetFreeBuffer()/AddBufferToPlay() are
+// therefore called from that background thread; DrainToLibretro() must
+// only ever be called from the main thread (inside retro_run()) so
+// audio_batch_cb() itself never has to be assumed thread-safe.
+//
+// Min/max/bit-depth/channel values match SugarboxV2's own real, working
+// ISound implementation (Sugarbox/ALSoundMixer.cpp -- GetMaxValue()
+// returns (1<<16)-1, GetMinValue() returns 0, 16-bit stereo), the same
+// reference used for the floppy-sound assets below.
+#define AUDIO_BUFFER_FRAMES 1024
+#define AUDIO_NUM_BUFFERS 8
+
+struct RetroWaveHDR : public IWaveHDR
+{
+   int16_t samples[AUDIO_BUFFER_FRAMES * 2]; // interleaved stereo
+};
+
+// ---------------------------------------------------------------------------
+// Floppy-drive sound effects (gap #9b from the cap32/crocods audit).
+//
+// Ported from SugarboxV2's Emulation::ItemLoaded/DiskEject/TrackChanged
+// (Emulation.cpp) -- the exact same IFdcNotify interface RetroFdcNotify
+// below already implements, currently only for the "FDC: ... OK (0)" log
+// line. WAV assets copied verbatim from the same app (see fdc_wav_data.h).
+#include "fdc_wav_data.h"
+
+// Real, empirically-discovered format mismatch: these 5 WAV assets are NOT
+// uniformly encoded. seek_short/seek_long/drive_mo are 16-bit/44100Hz, but
+// insert/eject are 8-bit (unsigned PCM, per the WAV spec)/22257Hz --
+// confirmed by decoding each array's own header directly. An earlier
+// version of this parser hardcoded "must be 16-bit" and silently rejected
+// the 8-bit pair (parse=0), so ItemLoaded()'s insert-disk chime and
+// DiskEject()'s eject chime never played. Supports both.
+static bool ParseWavPcmMono(const unsigned char* wav, const unsigned char** out_data, size_t* out_count, unsigned* out_rate, unsigned* out_bits)
+{
+   // Canonical 44-byte PCM WAV header (RIFF/WAVEfmt , 16-byte fmt chunk,
+   // 8-byte data-chunk header) -- same fixed-offset layout SugarboxV2's own
+   // ALSoundMixer::AddWav() parses (ALSoundMixer.cpp:346-356). Reading the
+   // real data size from the header itself (offset 0x28) rather than
+   // trusting a caller-supplied length is what makes this immune to
+   // Emulation.cpp's own AddWav() call-site bug (every call there passes
+   // sizeof(seek_short_wav) regardless of which array).
+   if (memcmp(wav, "RIFF", 4) != 0 || memcmp(wav + 8, "WAVE", 4) != 0)
+      return false;
+   const uint16_t channels = wav[0x16] | (wav[0x17] << 8);
+   const uint32_t rate = wav[0x18] | (wav[0x19] << 8) | (wav[0x1A] << 16) | (wav[0x1B] << 24);
+   const uint16_t bits = wav[0x22] | (wav[0x23] << 8);
+   const uint32_t data_size = wav[0x28] | (wav[0x29] << 8) | (wav[0x2A] << 16) | (wav[0x2B] << 24);
+   if (channels != 1 || (bits != 8 && bits != 16))
+      return false;
+   *out_data = wav + 0x2C;
+   *out_count = data_size / (bits / 8);
+   *out_rate = rate;
+   *out_bits = bits;
+   return true;
+}
+
+// One-shot at a time (a new trigger replaces whatever's playing) -- matches
+// real hardware, where a single floppy drive can't seek-short and
+// seek-long simultaneously. Only ever touched from the main thread (both
+// PlayFdcSfx, called from RetroFdcNotify's callbacks during RunFullSpeed(),
+// and MixFdcSound, called from DrainToLibretro() -- no locking needed.
+static const unsigned char* fdc_sfx_data_ = nullptr;
+static size_t fdc_sfx_total_ = 0;
+static unsigned fdc_sfx_bits_ = 16;
+static double fdc_sfx_step_ = 1.0;   // source-rate -> output-rate resample step
+static double fdc_sfx_srcpos_ = 0.0;
+
+static void PlayFdcSfx(const unsigned char* wav, unsigned output_rate)
+{
+   const unsigned char* data = nullptr;
+   size_t count = 0;
+   unsigned rate = 44100;
+   unsigned bits = 16;
+   if (!ParseWavPcmMono(wav, &data, &count, &rate, &bits))
+      return;
+   fdc_sfx_data_ = data;
+   fdc_sfx_total_ = count;
+   fdc_sfx_bits_ = bits;
+   fdc_sfx_srcpos_ = 0.0;
+   fdc_sfx_step_ = (output_rate > 0) ? (double)rate / (double)output_rate : 1.0;
+}
+
+// Nearest-neighbor resample + additive mix at -6dB (so a seek click never
+// buries the PSG music/SFX it's layered under) with hard clamping.
+// Adequate for short mechanical one-shots; not intended for music-quality
+// resampling. 8-bit WAV PCM is unsigned (128 = silence); 16-bit is signed.
+static void MixFdcSound(int16_t* stereo_buffer, size_t frames)
+{
+   if (fdc_sfx_data_ == nullptr)
+      return;
+   for (size_t i = 0; i < frames; i++)
+   {
+      const size_t src_index = (size_t)fdc_sfx_srcpos_;
+      if (src_index >= fdc_sfx_total_)
+      {
+         fdc_sfx_data_ = nullptr;
+         break;
+      }
+      const int16_t sample = (fdc_sfx_bits_ == 8)
+         ? (int16_t)((fdc_sfx_data_[src_index] - 128) * 256)
+         : reinterpret_cast<const int16_t*>(fdc_sfx_data_)[src_index];
+      const int add = sample / 2;
+      int mixed_l = stereo_buffer[i * 2] + add;
+      int mixed_r = stereo_buffer[i * 2 + 1] + add;
+      if (mixed_l > 32767) mixed_l = 32767; else if (mixed_l < -32768) mixed_l = -32768;
+      if (mixed_r > 32767) mixed_r = 32767; else if (mixed_r < -32768) mixed_r = -32768;
+      stereo_buffer[i * 2] = (int16_t)mixed_l;
+      stereo_buffer[i * 2 + 1] = (int16_t)mixed_r;
+      fdc_sfx_srcpos_ += fdc_sfx_step_;
+   }
+}
+
+class RetroSound : public ISound
+{
+public:
+   RetroSound()
+   {
+      for (auto& buf : buffers_)
+      {
+         buf.data_ = reinterpret_cast<char*>(buf.samples);
+         buf.buffer_length_ = sizeof(buf.samples);
+         buf.status_ = IWaveHDR::UNUSED;
+      }
+   }
+
+   // ICfg -- no on-disk config, same reasoning as ConfigurationManager below.
+   virtual void SetDefaultConfiguration() {}
+   virtual void SaveConfiguration(const char*, const char*) {}
+   virtual bool LoadConfiguration(const char*, const char*) { return true; }
+
+   // ISound
+   virtual bool Init(int, int, int) { return true; }
+   virtual void Reinit() {}
+   virtual unsigned int GetMaxValue() { return 65535; }
+   virtual unsigned int GetMinValue() { return 0; }
+   virtual unsigned int GetSampleRate() { return sample_rate_; }
+   virtual unsigned int GetBitDepth() { return 16; }
+   virtual unsigned int GetNbChannels() { return 2; }
+   virtual void CheckBuffersStatus() {}
+
+   virtual IWaveHDR* GetFreeBuffer()
+   {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (auto& buf : buffers_)
+      {
+         if (buf.status_ == IWaveHDR::UNUSED)
+         {
+            buf.status_ = IWaveHDR::USED;
+            return &buf;
+         }
+      }
+      return nullptr; // SoundMixer tolerates this (discards the sound) -- see ConvertToWav.
+   }
+
+   virtual void AddBufferToPlay(IWaveHDR* buf)
+   {
+      std::lock_guard<std::mutex> lock(mutex_);
+      buf->status_ = IWaveHDR::INQUEUE;
+      ready_.push_back(static_cast<RetroWaveHDR*>(buf));
+   }
+
+   virtual void SyncOnSound(bool) {}
+   virtual void SyncWithSound() {}
+
+   void SetSampleRate(unsigned rate) { sample_rate_ = rate; }
+
+   // Main thread only (called once per retro_run()). DEBUG-level (--verbose
+   // only) heartbeat kept as a diagnostic aid -- this bridge (SoundMixer's
+   // background thread feeding this queue, drained here) was non-obvious
+   // enough to get wrong twice while building it; a real audio capture
+   // (parecord) is still the authoritative test, not this log line.
+   void DrainToLibretro()
+   {
+      std::vector<RetroWaveHDR*> ready;
+      {
+         std::lock_guard<std::mutex> lock(mutex_);
+         ready.swap(ready_);
+      }
+      drain_calls_++;
+      buffers_drained_ += (unsigned)ready.size();
+      if (log_cb != nullptr && (drain_calls_ % 250) == 0)
+         log_cb(RETRO_LOG_DEBUG, "RetroSound: %u drain calls, %u buffers total.\n", drain_calls_, buffers_drained_);
+      for (RetroWaveHDR* buf : ready)
+      {
+         const size_t frames = buf->buffer_length_ / (2 * sizeof(int16_t));
+         MixFdcSound(buf->samples, frames);
+         audio_batch_cb(buf->samples, frames);
+         std::lock_guard<std::mutex> lock(mutex_);
+         buf->status_ = IWaveHDR::UNUSED;
+      }
+   }
+
+private:
+   RetroWaveHDR buffers_[AUDIO_NUM_BUFFERS];
+   std::vector<RetroWaveHDR*> ready_;
+   std::mutex mutex_;
+   unsigned sample_rate_ = 44100;
+   unsigned drain_calls_ = 0;
+   unsigned buffers_drained_ = 0;
+};
+static RetroSound retro_sound_;
 
 // FDC::LoadDisk() only reports success/failure through this notifier (see
 // EmulatorEngine::LoadDisk's switch on the return code, which -- in the
@@ -426,14 +648,24 @@ class RetroFdcNotify : public IFdcNotify
 public:
    virtual void ItemLoaded(const char* disk_path, int load_ok, int drive_number)
    {
+      if (load_ok == 0)
+         PlayFdcSfx(insert_wav, retro_sound_.GetSampleRate());
       if (log_cb == nullptr)
          return;
       const char* what = (load_ok == 0) ? "OK" : (load_ok == -1) ? "file not found" : "unknown/unsupported format";
       log_cb(RETRO_LOG_INFO, "FDC: drive %d load '%s': %s (%d).\n", drive_number, disk_path, what, load_ok);
    }
-   virtual void DiskEject() {}
-   virtual void DiskRunning(bool on) {}
-   virtual void TrackChanged(int nb_tracks) {}
+   virtual void DiskEject() { PlayFdcSfx(eject_wav, retro_sound_.GetSampleRate()); }
+   // Never actually called by the current CPCCoreEmu FDC (grepped -- only
+   // DiskEject/ItemLoaded/TrackChanged fire), kept implemented in case a
+   // future CPCCore version wires it up.
+   virtual void DiskRunning(bool on) { if (on) PlayFdcSfx(drive_mo_wav, retro_sound_.GetSampleRate()); }
+   virtual void TrackChanged(int nb_tracks)
+   {
+      // Same <20/>=20-track short/long split as SugarboxV2's Emulation::
+      // TrackChanged (Emulation.cpp:568-574).
+      PlayFdcSfx(nb_tracks < 20 ? seek_short_wav : seek_long_wav, retro_sound_.GetSampleRate());
+   }
 };
 
 // Definition of emulator
@@ -548,7 +780,11 @@ void retro_init(void)
    ApplyMachineType(var.value ? var.value : "6128");
 
    motherboard_ = emulator_->GetMotherboard();
-   motherboard_->GetPSG()->InitSound(nullptr);
+   // EmulatorEngine::InitSound() (not Motherboard::GetPSG()->InitSound(),
+   // which only sets a barely-used secondary field on the PSG -- see the
+   // RetroSound comment above) is what actually wires SoundMixer::Init(),
+   // the real audio path.
+   emulator_->InitSound(&retro_sound_);
    emulator_->OnOff();
 }
 
@@ -697,7 +933,6 @@ void retro_set_video_refresh(retro_video_refresh_t cb)
 
 static unsigned x_coord;
 static unsigned y_coord;
-static unsigned phase;
 static int mouse_rel_x;
 static int mouse_rel_y;
 
@@ -985,6 +1220,7 @@ static void check_variables(void)
    float last_rate = last_sample_rate;
    struct retro_system_av_info info;
    retro_get_system_av_info(&info);
+   retro_sound_.SetSampleRate((unsigned)last_sample_rate);
 
    if ((last != last_aspect && last != 0.0f) || (last_rate != last_sample_rate && last_rate != 0.0f))
    {
@@ -1002,22 +1238,6 @@ static void check_variables(void)
    }
 }
 
-static void audio_callback(void)
-{
-   for (unsigned i = 0; i < 30000 / 60; i++, phase++)
-   {
-      int16_t val = 0x800 * sinf(2.0f * M_PI * phase * 300.0f / 30000.0f);
-      audio_cb(val, val);
-   }
-
-   phase %= 100;
-}
-
-static void audio_set_state(bool enable)
-{
-   (void)enable;
-}
-
 void retro_run(void)
 {
    // RunFullSpeed() reads current_settings_ (TapePlugged/FDCPlugged/expansion
@@ -1030,8 +1250,11 @@ void retro_run(void)
 
    update_input();
 
-   if (!use_audio_cb)
-      audio_callback();
+   // Always drained from the main thread here, regardless of whether
+   // SET_AUDIO_CALLBACK negotiation below succeeds -- see the RetroSound
+   // comment for why this doesn't rely on audio_batch_cb() being
+   // thread-safe.
+   retro_sound_.DrainToLibretro();
 
    bool updated = false;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
@@ -1238,8 +1461,6 @@ bool retro_load_game(const struct retro_game_info *info)
    else
       log_cb(RETRO_LOG_INFO, "Rumble environment not supported.\n");
 
-   struct retro_audio_callback audio_cb = { audio_callback, audio_set_state };
-   use_audio_cb = environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK, &audio_cb);
 
    // Negotiate the newer EXT disk-control interface (adds set_initial_image/
    // get_image_path/get_image_label) if the frontend supports it, matching
