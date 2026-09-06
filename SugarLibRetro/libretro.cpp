@@ -5,14 +5,25 @@
 #include <string.h>
 #include <math.h>
 
-#define NO_MULTITHREAD 
-#define NOFILTER 
-#define NOZLIB 
-#define NO_RAW_FORMAT
+// NOTE: this file used to #define NO_MULTITHREAD/NOFILTER/NOZLIB/NO_RAW_FORMAT
+// here to build a leaner CPCCoreEmu for libretro. CPCCoreEmu's own CMakeLists
+// never applies those as compile definitions to the library itself, though --
+// they only affected this translation unit's view of CPCCoreEmu's headers
+// (e.g. Tape.h/DiskContainer.h gate real members behind `#ifndef NOZLIB`).
+// That's an ODR violation: this file computed a different (smaller) sizeof()
+// for classes like Motherboard/EmulatorEngine than the actually-linked
+// CPCCoreEmu.a was built with, so `new EmulatorEngine()` undersized its
+// allocation -- a heap-buffer-overflow confirmed live under ASan
+// (BreakpointHandler::BreakpointHandler() writing past the end of an
+// undersized EmulatorEngine, manifesting downstream as "double free or
+// corruption" at retro_deinit). Do not redefine these without also making
+// CPCCoreEmu's CMakeLists pass them to the library build.
 
 #include "Machine.h"
 #include "Cartridge.h"
+#include "IDirectories.h"
 #include "libretro.h"
+#include <string>
 
 //#define WIDTH  768
 #define WIDTH  640
@@ -237,6 +248,31 @@ public:
    }
 };
 
+// EmulatorEngine::LoadRom() joins this with "ROM/<filename>" to open lower/
+// upper ROM files (see Machine.cpp's ROMPath). RetroArch's system directory
+// is where REG-Linux configures BIOS-style assets (equivalent to
+// /userdata/bios/amstradcpc/ on REG-Linux); a bundled default ROM set ships
+// under SugarLibRetro/system/amstradcpc/ROM/ in this repo for that path, and
+// the same layout lets a user drop their own dumps there to override it.
+class RetroDirectories : public IDirectories
+{
+public:
+   virtual const char* GetBaseDirectory()
+   {
+      if (base_directory_.empty())
+      {
+         const char* system_dir = nullptr;
+         if (environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_dir) && system_dir)
+            base_directory_ = std::string(system_dir) + "/amstradcpc";
+         else
+            base_directory_ = "amstradcpc";
+      }
+      return base_directory_.c_str();
+   }
+private:
+   std::string base_directory_;
+};
+
 
 
 static struct retro_log_callback logging;
@@ -251,6 +287,8 @@ static Motherboard * motherboard_ = nullptr;
 static ConfigurationManager conf_manager_;
 static RetroDisplay display_;
 static Keyboard keyboard_;
+static RetroDirectories directories_;
+static MachineSettings machine_settings_;
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -339,27 +377,30 @@ int LoadCprFromBuffer(unsigned char* buffer, int size)
 
 void retro_init(void)
 {
-   motherboard_ = new Motherboard(nullptr, &keyboard_);
+   // Phase 1: boot a plain (non-Plus) CPC 6128 through the real EmulatorEngine/
+   // MachineSettings facade instead of hand-configuring Motherboard directly --
+   // this is what makes model selection (464/664/6128/Plus/GX4000) a config
+   // change instead of a rewrite. GX4000/Plus boot (the embedded-cartridge
+   // path below) still goes through the old direct-Motherboard path for now;
+   // unifying the two is follow-up work once this path is proven.
+   emulator_ = new EmulatorEngine();
+   emulator_->SetDirectories(&directories_);
+   emulator_->SetConfigurationManager(&conf_manager_);
+   emulator_->Init(&display_, nullptr);
 
-   // Create 
-   motherboard_->SetPlus(true);
-   motherboard_->InitMotherbard(nullptr, nullptr, &display_, nullptr, nullptr, nullptr);
+   machine_settings_.SetHardwareType(MachineSettings::OLD_6128);
+   machine_settings_.SetRamCfg(MachineSettings::M128_K);
+   machine_settings_.SetLowerRom("cpc6128_os_uk.rom");
+   machine_settings_.SetUpperRom(0, "cpc6128_basic_uk.rom");
+   machine_settings_.SetCRTCType(CRTC::AMS40226);
+   machine_settings_.SetTapePlugged(true);
+   machine_settings_.SetFDCPlugged(true);
+   machine_settings_.SetPALPlugged(true);
+   emulator_->ChangeSettings(&machine_settings_); // calls UpdateComputer() internally
+
+   motherboard_ = emulator_->GetMotherboard();
    motherboard_->GetPSG()->InitSound(nullptr);
-
-   motherboard_->OnOff();
-   motherboard_->GetMem()->InitMemory();
-   motherboard_->GetMem()->SetRam(1);
-   motherboard_->GetCRTC()->DefinirTypeCRTC(CRTC::AMS40226);
-   motherboard_->GetVGA()->SetPAL(true);
-
-   // load CPR
-      LoadCprFromBuffer(AmstradPLUS_FR, sizeof(AmstradPLUS_FR));
-
-   motherboard_->GetPSG()->Reset();
-   motherboard_->GetSig()->Reset();
-   motherboard_->InitStartOptimizedPlus();
-   motherboard_->OnOff();
-
+   emulator_->OnOff();
 }
 
 void retro_deinit(void)
@@ -436,7 +477,10 @@ void retro_set_environment(retro_environment_t cb)
 
    cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);
 
-   bool no_content = false;
+   // The machine boots on its own in retro_init() (real EmulatorEngine/
+   // MachineSettings bring-up, Phase 1) -- a cartridge/disk/tape is optional
+   // content, not a requirement to run at all.
+   bool no_content = true;
    cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_content);
 
    if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging))
@@ -654,9 +698,13 @@ static void audio_set_state(bool enable)
 
 void retro_run(void)
 {
-   // gx4000 for the moment
-   //motherboard_->Start(Motherboard::HW_PLUS, 4000 * 50 * 20);
-   motherboard_->StartOptimizedPlus<true, false, false>(4000 * 50 * 20);
+   // RunFullSpeed() reads current_settings_ (TapePlugged/FDCPlugged/expansion
+   // count) and dispatches to the right StartOptimizedPlus<...> instantiation
+   // itself -- this is what makes retro_run model-agnostic. Its time_slice_
+   // default (20ms) is exactly one 50Hz frame, so one call per retro_run is
+   // correct (the old hardcoded call ran a 20-frame slice per retro_run,
+   // apparently a bug/quirk of the GX4000-only prototype).
+   emulator_->RunFullSpeed();
 
    update_input();
 
