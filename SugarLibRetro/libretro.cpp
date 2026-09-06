@@ -854,6 +854,9 @@ static RetroDirectories directories_;
 static MachineSettings machine_settings_;
 static RetroFdcNotify fdc_notify_;
 static bool autorun_enabled_ = true;
+// -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
+// CRTC::TypeCRTC value forced by the user.
+static int crtc_type_option_ = -1;
 
 // Picks the launch command for freshly-loaded media. drive_number == -1
 // means this was a tape, not a disk: the cassette firmware's RUN" with no
@@ -1097,6 +1100,9 @@ void retro_set_environment(retro_environment_t cb)
       // "green" is the authentic GT65 monochrome monitor the CPC shipped
       // with alongside the CTM644 colour one; amber is a convenience.
       { "sugarbox_monitor", "Monitor; color|green|amber" },
+      // "auto" uses the type the real machine shipped with (464/664 = 0,
+      // 6128 = 1, Plus/GX4000 = 4); override when a demo needs another.
+      { "sugarbox_crtc", "CRTC type; auto|0|1|2|3|4" },
       { NULL, NULL },
    };
 
@@ -1377,6 +1383,7 @@ static void ApplyMachineType(const char* model)
    const char* lower_rom;
    const char* upper_rom;
    MachineSettings::RamCfg ram;
+   CRTC::TypeCRTC default_crtc = CRTC::UM6845R;
    bool tape_plugged = true;
    bool fdc_plugged = true;
    const char* cartridge_file = nullptr; // non-null => Plus/GX4000-style cartridge boot
@@ -1384,6 +1391,7 @@ static void ApplyMachineType(const char* model)
    if (!strcmp(model, "664"))
    {
       hw = MachineSettings::OLD_664;
+      default_crtc = CRTC::HD6845S;
       lower_rom = "os664.rom";
       upper_rom = "basic664.rom";
       ram = MachineSettings::M64_K;
@@ -1391,6 +1399,7 @@ static void ApplyMachineType(const char* model)
    else if (!strcmp(model, "464"))
    {
       hw = MachineSettings::OLD_464;
+      default_crtc = CRTC::HD6845S;
       lower_rom = "os464.rom";
       upper_rom = "basic464.rom";
       ram = MachineSettings::M64_K;
@@ -1403,6 +1412,7 @@ static void ApplyMachineType(const char* model)
       // different StartOptimizedPlus<...> instantiation based on these
       // flags, so this isn't just cosmetic.
       hw = MachineSettings::GX400;
+      default_crtc = CRTC::AMS40226;
       lower_rom = "os6128.rom";
       upper_rom = "basic6128.rom";
       ram = MachineSettings::M64_K;
@@ -1423,6 +1433,7 @@ static void ApplyMachineType(const char* model)
       // Plus and GX4000 -- which is byte-identical to the plus_en.cpr this
       // repo already had from CPCCore's own test assets.
       hw = MachineSettings::PLUS_6128;
+      default_crtc = CRTC::AMS40226;
       lower_rom = "os6128.rom";
       upper_rom = "basic6128.rom";
       ram = MachineSettings::M128_K;
@@ -1431,6 +1442,7 @@ static void ApplyMachineType(const char* model)
    else // "6128", and the fallback for anything unrecognised
    {
       hw = MachineSettings::OLD_6128;
+      default_crtc = CRTC::UM6845R;
       lower_rom = "os6128.rom";
       upper_rom = "basic6128.rom";
       ram = MachineSettings::M128_K;
@@ -1455,7 +1467,18 @@ static void ApplyMachineType(const char* model)
    // populates upper_rom_[] from an INI we deliberately stub out, so
    // nothing else was ever going to set it.
    machine_settings_.SetUpperRom(7, "amsdos.rom");
-   machine_settings_.SetCRTCType(CRTC::AMS40226);
+   // CRTC type. Real CPCs shipped with several different CRTC chips whose
+   // behavioural differences are software-visible (a lot of demos, and some
+   // games, only run correctly on the type they were written for). This was
+   // previously hardcoded to AMS40226 for every model, which is right only
+   // for the Plus/GX4000: per SugarboxV2's own machine configs
+   // (Sugarbox/CONF/CPC*.cfg, Type_CRTC=) a 464 and 664 are type 0
+   // (HD6845S/UM6845), a 6128 is type 1 (UM6845R), and a 6128 Plus is
+   // type 4. crtc_type_option_ lets the user override that per-model
+   // default when a particular demo needs a different one.
+   machine_settings_.SetCRTCType(crtc_type_option_ >= 0
+      ? static_cast<CRTC::TypeCRTC>(crtc_type_option_)
+      : default_crtc);
    machine_settings_.SetTapePlugged(tape_plugged);
    machine_settings_.SetFDCPlugged(fdc_plugged);
    machine_settings_.SetPALPlugged(true);
@@ -1498,6 +1521,23 @@ static void check_variables(void)
    var.key = "sugarbox_keyboard_layout";
    var.value = nullptr;
    ApplyKeyboardLayout((environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) ? var.value : "uk");
+
+   var.key = "sugarbox_crtc";
+   var.value = nullptr;
+   {
+      const int previous_crtc = crtc_type_option_;
+      crtc_type_option_ = -1;
+      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value && strcmp(var.value, "auto") != 0)
+         crtc_type_option_ = atoi(var.value);
+      if (previous_crtc != crtc_type_option_)
+      {
+         // Force ApplyMachineType() to redo the settings even though the
+         // model string itself has not changed.
+         const std::string model = last_applied_model_;
+         last_applied_model_.clear();
+         ApplyMachineType(model.c_str());
+      }
+   }
 
    var.key = "sugarbox_monitor";
    var.value = nullptr;
