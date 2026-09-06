@@ -30,4 +30,47 @@ disk_control = "true"
 is_experimental = "true"
 needs_kbd_mouse_focus = "true"
 
-description = "SugarboxV2/CPCCore-based Amstrad CPC/CPC+/GX4000 core. Emulates the 464, 664, 6128, 6128+ and GX4000 models, switchable at runtime with no restart. Unlike other libretro Amstrad CPC cores, this one supports protected/flux-level disk formats (IPF/CAPS, CTRAW, HFE, SCP) in addition to plain DSK/EDSK, as well as tape (.cdt/.tap/.tzx/.csw/.voc/.wav) and .cpr cartridges. Real keyboard input requires enabling RetroArch's Game Focus mode to type commands (RUN\"/CAT) needed to launch non-cartridge content."
+# Firmware
+# ROMs live under <system>/amstradcpc/ROM/. The 6128 pair is what the
+# default model needs; the rest are only required if you switch model with
+# the amstradcpc_model core option, so they are marked optional. amsdos.rom
+# is the disk operating system ROM (expansion slot 7) -- without it the
+# machine has no disk firmware at all and RUN"/CAT fall through to the
+# cassette handler, so disks cannot be read.
+firmware_count = 8
+
+firmware0_desc = "amstradcpc/ROM/os6128.rom (CPC 6128 OS, also used by 6128+/GX4000)"
+firmware0_path = "amstradcpc/ROM/os6128.rom"
+firmware0_opt = "false"
+
+firmware1_desc = "amstradcpc/ROM/basic6128.rom (CPC 6128 BASIC 1.1)"
+firmware1_path = "amstradcpc/ROM/basic6128.rom"
+firmware1_opt = "false"
+
+firmware2_desc = "amstradcpc/ROM/amsdos.rom (AMSDOS disk operating system, required for disk access)"
+firmware2_path = "amstradcpc/ROM/amsdos.rom"
+firmware2_opt = "false"
+
+firmware3_desc = "amstradcpc/ROM/os464.rom (CPC 464 OS)"
+firmware3_path = "amstradcpc/ROM/os464.rom"
+firmware3_opt = "true"
+
+firmware4_desc = "amstradcpc/ROM/basic464.rom (CPC 464 BASIC 1.0)"
+firmware4_path = "amstradcpc/ROM/basic464.rom"
+firmware4_opt = "true"
+
+firmware5_desc = "amstradcpc/ROM/os664.rom (CPC 664 OS)"
+firmware5_path = "amstradcpc/ROM/os664.rom"
+firmware5_opt = "true"
+
+firmware6_desc = "amstradcpc/ROM/basic664.rom (CPC 664 BASIC 1.1)"
+firmware6_path = "amstradcpc/ROM/basic664.rom"
+firmware6_opt = "true"
+
+firmware7_desc = "amstradcpc/ROM/system.cpr (6128+/GX4000 system cartridge)"
+firmware7_path = "amstradcpc/ROM/system.cpr"
+firmware7_opt = "true"
+
+notes = "(!) amstradcpc/ROM/os6128.rom (md5): 9ba1b052c77713024bf2eb224cad2062|(!) amstradcpc/ROM/basic6128.rom (md5): 2cc1ba759f835c98a480a152d786b877|(!) amstradcpc/ROM/amsdos.rom (md5): 25629dfe870d097469c217b95fdc1c95|(!) amstradcpc/ROM/os464.rom (md5): a175623be3162846c46eae2ca1723031|(!) amstradcpc/ROM/basic464.rom (md5): f7f3b668537b135dd42195e76c5d490e|(!) amstradcpc/ROM/os664.rom (md5): 2b04cc6c472e2d405092dd10b26b074e|(!) amstradcpc/ROM/basic664.rom (md5): d81ab6eb0fa175124329bf56eec0a272|(!) amstradcpc/ROM/system.cpr (md5): 39b565e648172980aa552293e667070f"
+
+description = "SugarboxV2/CPCCore-based Amstrad CPC/CPC+/GX4000 core. Emulates the 464, 664, 6128, 6128+ and GX4000 models, switchable at runtime with no restart. Unlike other libretro Amstrad CPC cores, this one supports protected/flux-level disk formats (IPF/CAPS, CTRAW, HFE, SCP) in addition to plain DSK/EDSK, as well as tape (.cdt/.tap/.tzx/.csw/.voc/.wav) and .cpr cartridges. Disks and tapes are launched automatically: the core reads the inserted disc's own catalogue and types the right RUN\" command for you. Typing on the emulated keyboard yourself requires enabling RetroArch's Game Focus mode."

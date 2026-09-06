@@ -157,10 +157,10 @@ static const KeyMapEntry kKeyMap[] = {
    { RETROK_CARET,       3, 0 }, { RETROK_MINUS,   3, 1 }, { RETROK_EQUALS, 3, 1 },
    { RETROK_AT,          3, 2 }, { RETROK_p,       3, 3 },
    { RETROK_SEMICOLON,   3, 4 }, { RETROK_COLON,   3, 5 },
-   { RETROK_SLASH,       3, 6 }, { RETROK_COMMA,   3, 7 },
+   { RETROK_SLASH,       3, 6 }, { RETROK_PERIOD,  3, 7 },
    { RETROK_0,           4, 0 }, { RETROK_9,       4, 1 }, { RETROK_o,      4, 2 },
    { RETROK_i,           4, 3 }, { RETROK_l,       4, 4 }, { RETROK_k,      4, 5 },
-   { RETROK_m,           4, 6 }, { RETROK_PERIOD,  4, 7 },
+   { RETROK_m,           4, 6 }, { RETROK_COMMA,   4, 7 },
    // Row 3 bit 5 is the "*:" key (colon/asterisk), NOT quote -- the
    // apostrophe/quote key is row 5 bit 1 ("'7", shift+7 on a real CPC).
    // This was wrong in the original table (mapped RETROK_QUOTE to 3,5).
@@ -179,6 +179,59 @@ static const KeyMapEntry kKeyMap[] = {
    { RETROK_CAPSLOCK,    8, 6 }, { RETROK_z,       8, 7 },
    { RETROK_BACKSPACE,   9, 7 }, { RETROK_DELETE,  9, 7 },
 };
+
+// AZERTY host-keyboard overrides (gap #8).
+//
+// RetroArch reports RETROK_* by PHYSICAL key position against a US/QWERTY
+// reference, not by the host's active layout -- verified empirically: with
+// a French layout active, `xdotool key a` (the key labelled A, physically
+// where QWERTY has Q) arrived as RETROK_q. The bundled OS ROMs are the UK
+// ones, so the emulated machine always decodes a matrix position to the
+// English character. The result for an AZERTY user is that the key they
+// press and the character the CPC prints disagree.
+//
+// This remaps the affected physical keys to the matrix position whose
+// ENGLISH character matches what is actually printed on the AZERTY keycap
+// (letter positions cross-checked against SugarboxV2's own
+// CONF/KeyboardMaps.ini [FRENCH] vs [ENGLISH] sections, which differ in
+// exactly 26 entries).
+//
+// Deliberately limited to the letter/punctuation swaps: AZERTY's digit row
+// is shifted (unshifted gives &e"'( ...), which cannot be corrected by
+// remapping positions alone -- it needs character-level input synthesis
+// (injecting/suppressing the CPC's own shift), a much larger change. Digits
+// and symbols therefore still follow the English ROM.
+static const KeyMapEntry kKeyMapOverridesFR[] = {
+   { RETROK_a,         8, 3 }, // physical A -> AZERTY 'Q'
+   { RETROK_q,         8, 5 }, // physical Q -> AZERTY 'A'
+   { RETROK_w,         8, 7 }, // physical W -> AZERTY 'Z'
+   { RETROK_z,         7, 3 }, // physical Z -> AZERTY 'W'
+   { RETROK_SEMICOLON, 4, 6 }, // physical ; -> AZERTY 'M'
+   { RETROK_m,         4, 7 }, // physical M -> AZERTY ','
+   { RETROK_COMMA,     3, 4 }, // physical , -> AZERTY ';'
+   { RETROK_PERIOD,    3, 5 }, // physical . -> AZERTY ':'
+};
+
+// kKeyMap with the active layout's overrides applied; rebuilt by
+// ApplyKeyboardLayout() whenever the core option changes.
+static KeyMapEntry active_keymap_[sizeof(kKeyMap) / sizeof(kKeyMap[0])];
+static size_t active_keymap_size_ = 0;
+
+static void ApplyKeyboardLayout(const char* layout)
+{
+   memcpy(active_keymap_, kKeyMap, sizeof(kKeyMap));
+   active_keymap_size_ = sizeof(kKeyMap) / sizeof(kKeyMap[0]);
+   if (layout == nullptr || strcmp(layout, "fr") != 0)
+      return;
+   for (size_t o = 0; o < sizeof(kKeyMapOverridesFR) / sizeof(kKeyMapOverridesFR[0]); ++o)
+   {
+      for (size_t i = 0; i < active_keymap_size_; ++i)
+      {
+         if (active_keymap_[i].retrok == kKeyMapOverridesFR[o].retrok)
+            active_keymap_[i] = kKeyMapOverridesFR[o];
+      }
+   }
+}
 
 // Autorun: types a launch command shortly after a fresh disk/tape load.
 // The CPC needs one to start anything that isn't a .cpr cartridge -- real
@@ -226,7 +279,7 @@ static const AutorunKey kAutorunKeys[] = {
    { '9', 4, 1, false },
    // Punctuation an AMSDOS filename / RSX command can contain
    { ' ',  5, 7, false }, { '\r', 2, 2, false },
-   { '.',  4, 7, false }, { ',',  3, 7, false }, { ':',  3, 5, false },
+   { '.',  3, 7, false }, { ',',  4, 7, false }, { ':',  3, 5, false },
    { ';',  3, 4, false }, { '/',  3, 6, false }, { '-',  3, 1, false },
    { '@',  3, 2, false }, { '[',  2, 1, false }, { ']',  2, 3, false },
    { '\\', 2, 6, false },
@@ -877,6 +930,10 @@ void retro_init(void)
    // Boots through the real EmulatorEngine/MachineSettings facade -- model
    // selection (464/664/6128/plus6128/gx4000, see ApplyMachineType) is a
    // config change, not a rewrite.
+   // Base (UK) layout until check_variables() reads the real option --
+   // update_input() must never poll an empty table.
+   ApplyKeyboardLayout("uk");
+
    emulator_ = new EmulatorEngine();
    emulator_->SetDirectories(&directories_);
    emulator_->SetConfigurationManager(&conf_manager_);
@@ -977,6 +1034,9 @@ void retro_set_environment(retro_environment_t cb)
       // this automatically types RUN" + Enter once, ~2s after a fresh
       // disk/tape load, matching cap32's own cap32_autorun option.
       { "sugarbox_autorun", "Autorun disk/tape; enabled|disabled" },
+      // Host keyboard layout. Only affects which CPC key a physical host
+      // key presses -- see kKeyMapOverridesFR.
+      { "sugarbox_keyboard_layout", "Host keyboard layout; uk|fr" },
       { NULL, NULL },
    };
 
@@ -1181,10 +1241,10 @@ static void update_input(void)
    if (button_X)  matrix[9] &= ~0x10;
    if (button_A)  matrix[9] &= ~0x20;
 
-   for (size_t i = 0; i < sizeof(kKeyMap) / sizeof(kKeyMap[0]); ++i)
+   for (size_t i = 0; i < active_keymap_size_; ++i)
    {
-      if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, kKeyMap[i].retrok))
-         matrix[kKeyMap[i].line] &= ~(1 << kKeyMap[i].bit);
+      if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, active_keymap_[i].retrok))
+         matrix[active_keymap_[i].line] &= ~(1 << active_keymap_[i].bit);
    }
 
    TickAutorun(matrix);
@@ -1374,6 +1434,10 @@ static void check_variables(void)
    var.value = nullptr;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
       autorun_enabled_ = (strcmp(var.value, "enabled") == 0);
+
+   var.key = "sugarbox_keyboard_layout";
+   var.value = nullptr;
+   ApplyKeyboardLayout((environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) ? var.value : "uk");
 
    float last = last_aspect;
    float last_rate = last_sample_rate;
