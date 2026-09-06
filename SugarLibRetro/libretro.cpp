@@ -470,7 +470,7 @@ void retro_set_environment(retro_environment_t cb)
       // switch takes effect immediately (no restart needed): ApplyMachineType()
       // is called both here at load and from check_variables() on
       // RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE.
-      { "amstradcpc_model", "CPC Model; 6128|664|464" },
+      { "amstradcpc_model", "CPC Model; 6128|664|464|plus6128" },
       { NULL, NULL },
    };
 
@@ -661,6 +661,7 @@ static void ApplyMachineType(const char* model)
    const char* lower_rom;
    const char* upper_rom;
    MachineSettings::RamCfg ram;
+   bool is_plus = false;
 
    if (!strcmp(model, "664"))
    {
@@ -675,6 +676,23 @@ static void ApplyMachineType(const char* model)
       lower_rom = "cpc464_os_uk.rom";
       upper_rom = "cpc464_basic_uk.rom";
       ram = MachineSettings::M64_K;
+   }
+   else if (!strcmp(model, "plus6128"))
+   {
+      // Real Plus hardware runs an ASIC-aware OS that differs from a plain
+      // 6128's -- CPCCore's test assets don't have a dumped Plus-specific
+      // lower/upper ROM pair, so this reuses the plain 6128 UK set as a
+      // placeholder. UpdateComputer() (called via ChangeSettings() below)
+      // still loads it for Plus hardware types before separately loading the
+      // default cartridge (a completely different memory region -- cartridge
+      // banks, not ROM banks; see LoadCprFromBuffer). Whether the plain OS is
+      // "good enough" or visibly wrong is unverified -- this build has no
+      // display, only "boots and runs without crashing" is checked here.
+      hw = MachineSettings::PLUS_6128;
+      lower_rom = "cpc6128_os_uk.rom";
+      upper_rom = "cpc6128_basic_uk.rom";
+      ram = MachineSettings::M128_K;
+      is_plus = true;
    }
    else // "6128", and the fallback for anything unrecognised
    {
@@ -695,6 +713,16 @@ static void ApplyMachineType(const char* model)
    machine_settings_.SetTapePlugged(true);
    machine_settings_.SetFDCPlugged(true);
    machine_settings_.SetPALPlugged(true);
+
+   if (is_plus)
+   {
+      // LoadCpr() (called from UpdateComputer() for Plus hardware types)
+      // takes this as a plain fopen() path, unlike LoadRom() -- it does not
+      // join it with GetBaseDirectory() itself, so the full path has to be
+      // built here.
+      std::string cart_path = std::string(directories_.GetBaseDirectory()) + "/ROM/plus_en.cpr";
+      machine_settings_.SetDefaultCartridge(cart_path.c_str());
+   }
 
    if (emulator_ != nullptr)
       emulator_->ChangeSettings(&machine_settings_); // calls UpdateComputer()
