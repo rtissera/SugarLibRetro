@@ -234,48 +234,55 @@ static const OskCommand kOskCommands[] = {
 #define OSK_NUM_COMMANDS (int)(sizeof(kOskCommands) / sizeof(kOskCommands[0]))
 
 // Option B: free-text grid, for the filenames/text-adventure input the
-// curated command list above can't cover. Laid out by the CPC's REAL
-// hardware matrix -- row r is matrix line r+2, column is the bit within
-// that line -- not an alphabetical or QWERTY-guess re-sort. Lines 0-1
-// (cursor keys, F-keys, numpad) hold nothing typable and are skipped
-// entirely; a few bits within lines 2-8 are non-character keys (Clr, F4,
-// Shift, Ctrl, Esc, Tab, CapsLock) and are left as empty cells. `shifted`
-// is 0 where the real key has no shifted character; for letters it's the
-// uppercase form -- a real Shift+letter, unlike the curated-command path
-// above (ArmAutorun/kAutorunKeys hardcode every letter unshifted, since
-// AMSDOS filenames are case-insensitive and never needed uppercase; this
-// grid presses the matrix directly, so it isn't limited the same way).
-// `special` overrides both and draws a text label instead of one glyph,
-// for the two non-character actions worth having (Enter, Delete).
+// curated command list above can't cover. Laid out by the REAL VISUAL
+// keyboard rows a CPC 6128 actually has -- not by matrix line. The matrix
+// (kKeyMap/kAutorunKeys above, cross-checked against MAME's amstrad.cpp
+// driver, byte-for-byte identical) is wired diagonally across lines for
+// anti-ghosting, NOT one line per visual row: line 2 alone holds `[` (sits
+// next to P), `]` (sits next to L) and Return (spans both those rows) --
+// three different rows on the real keyboard, one electrical line. Row
+// order/contents here were read directly off a real CPC 6128 keyboard
+// photo (English_CPC_6128_keyboard_yoshi_doshi.jpg, cpcwiki.eu) and
+// verified letter-by-letter against kAutorunKeys, not guessed. The
+// separate cursor/numpad/F-key block (matrix lines 0-1) is still excluded
+// -- redundant with the real d-pad and not part of the alphanumeric
+// keyboard a filename/sentence needs.
+// `shifted` is 0 where the real key has no shifted character; for letters
+// it's the uppercase form -- a real Shift+letter, unlike the
+// curated-command path above (ArmAutorun/kAutorunKeys hardcode every
+// letter unshifted, since AMSDOS filenames are case-insensitive and never
+// needed uppercase; this grid presses the matrix directly, so it isn't
+// limited the same way). `special` overrides both and draws a text label
+// instead of one glyph, for the real actions worth having beyond plain
+// characters (Enter, Delete, Esc, Tab, Caps Lock, Clr, Ctrl, Copy, Space).
 struct OskGridCell { int line; int bit; char unshifted; char shifted; const char* special; };
-#define OSK_GRID_ROWS 8
-#define OSK_GRID_COLS 8
+#define OSK_GRID_ROWS 5
+#define OSK_GRID_COLS 15
+#define E {0,0,0,0,nullptr}
 static const OskGridCell kOskGrid[OSK_GRID_ROWS][OSK_GRID_COLS] = {
-   // line 2: Clr [{ Return ]} F4 Shift `\ Ctrl
-   { {0,0,0,0,nullptr}, {2,1,'[',0,nullptr}, {2,2,0,0,"RET"}, {2,3,']',0,nullptr},
-     {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {2,6,'\\',0,nullptr}, {0,0,0,0,nullptr} },
-   // line 3: ^(caret) =- @| P +; *: ?/ >,
-   { {3,0,0,'^',nullptr}, {3,1,'-','=',nullptr}, {3,2,'@','|',nullptr}, {3,3,'p',0,nullptr},
-     {3,4,';','+',nullptr}, {3,5,':','*',nullptr}, {3,6,'/','?',nullptr}, {3,7,'.','>',nullptr} },
-   // line 4: _0 )9 O I L K M <.
-   { {4,0,'0','_',nullptr}, {4,1,'9',')',nullptr}, {4,2,'o','O',nullptr}, {4,3,'i','I',nullptr},
-     {4,4,'l','L',nullptr}, {4,5,'k','K',nullptr}, {4,6,'m','M',nullptr}, {4,7,',','<',nullptr} },
-   // line 5: (8 '7 U Y H J N Space
-   { {5,0,'8','(',nullptr}, {5,1,'7','\'',nullptr}, {5,2,'u','U',nullptr}, {5,3,'y','Y',nullptr},
-     {5,4,'h','H',nullptr}, {5,5,'j','J',nullptr}, {5,6,'n','N',nullptr}, {5,7,0,0,"SPC"} },
-   // line 6: &6 %5 R T G F B V
-   { {6,0,'6','&',nullptr}, {6,1,'5','%',nullptr}, {6,2,'r','R',nullptr}, {6,3,'t','T',nullptr},
-     {6,4,'g','G',nullptr}, {6,5,'f','F',nullptr}, {6,6,'b','B',nullptr}, {6,7,'v','V',nullptr} },
-   // line 7: $4 #3 E W S D C X
-   { {7,0,'4','$',nullptr}, {7,1,'3','#',nullptr}, {7,2,'e','E',nullptr}, {7,3,'w','W',nullptr},
-     {7,4,'s','S',nullptr}, {7,5,'d','D',nullptr}, {7,6,'c','C',nullptr}, {7,7,'x','X',nullptr} },
-   // line 8: !1 "2 Esc Q Tab A CapsLock Z
-   { {8,0,'1','!',nullptr}, {8,1,'2','"',nullptr}, {0,0,0,0,nullptr}, {8,3,'q','Q',nullptr},
-     {0,0,0,0,nullptr}, {8,5,'a','A',nullptr}, {0,0,0,0,nullptr}, {8,7,'z','Z',nullptr} },
-   // line 9: Joy0Up Joy0Down Joy0Left Joy0Right Joy0Fire1 Joy0Fire2 unused Del
-   { {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {0,0,0,0,nullptr},
-     {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {9,7,0,0,"DEL"} },
+   // Row 1: Esc 1..0 - ^ Clr Del
+   { {8,2,0,0,"ESC"}, {8,0,'1','!',nullptr}, {8,1,'2','"',nullptr}, {7,1,'3','#',nullptr},
+     {7,0,'4','$',nullptr}, {6,1,'5','%',nullptr}, {6,0,'6','&',nullptr}, {5,1,'7','\'',nullptr},
+     {5,0,'8','(',nullptr}, {4,1,'9',')',nullptr}, {4,0,'0','_',nullptr}, {3,1,'-','=',nullptr},
+     {3,0,0,'^',nullptr}, {2,0,0,0,"CLR"}, {9,7,0,0,"DEL"} },
+   // Row 2: Tab Q..P @ [ Return
+   { {8,4,0,0,"TAB"}, {8,3,'q','Q',nullptr}, {7,3,'w','W',nullptr}, {7,2,'e','E',nullptr},
+     {6,2,'r','R',nullptr}, {6,3,'t','T',nullptr}, {5,3,'y','Y',nullptr}, {5,2,'u','U',nullptr},
+     {4,3,'i','I',nullptr}, {4,2,'o','O',nullptr}, {3,3,'p','P',nullptr}, {3,2,'@','|',nullptr},
+     {2,1,'[',0,nullptr}, {2,2,0,0,"RET"}, E },
+   // Row 3: CapsLock A..L : ; ]
+   { {8,6,0,0,"CAPS"}, {8,5,'a','A',nullptr}, {7,4,'s','S',nullptr}, {7,5,'d','D',nullptr},
+     {6,5,'f','F',nullptr}, {6,4,'g','G',nullptr}, {5,4,'h','H',nullptr}, {5,5,'j','J',nullptr},
+     {4,5,'k','K',nullptr}, {4,4,'l','L',nullptr}, {3,5,':','*',nullptr}, {3,4,';','+',nullptr},
+     {2,3,']',0,nullptr}, E, E },
+   // Row 4: Z..M , . / (backslash)
+   { {8,7,'z','Z',nullptr}, {7,7,'x','X',nullptr}, {7,6,'c','C',nullptr}, {6,7,'v','V',nullptr},
+     {6,6,'b','B',nullptr}, {5,6,'n','N',nullptr}, {4,6,'m','M',nullptr}, {4,7,',','<',nullptr},
+     {3,7,'.','>',nullptr}, {3,6,'/','?',nullptr}, {2,6,'\\',0,nullptr}, E, E, E, E },
+   // Row 5: Ctrl Copy Space
+   { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
 };
+#undef E
 
 static bool OskGridCellEmpty(int row, int col)
 {
@@ -283,8 +290,8 @@ static bool OskGridCellEmpty(int row, int col)
    return c.unshifted == 0 && c.shifted == 0 && c.special == nullptr;
 }
 
-static int osk_grid_row_ = 3; // starts on line 5 ('h'), a populated cell near the panel centre
-static int osk_grid_col_ = 4;
+static int osk_grid_row_ = 2; // starts on 'g' (row 3, the ASDFGHJKL row) -- near the panel centre
+static int osk_grid_col_ = 5;
 static bool osk_shift_ = false;
 
 // Which of a cell's two characters is currently selected -- the shift
@@ -309,8 +316,8 @@ static char OskGridCellChar(const OskGridCell& c)
 #define OSK_TEXT_SCALE 2
 
 #define OSK_GRID_CELL_W 40
-#define OSK_GRID_CELL_H 40
-#define OSK_GRID_X 60
+#define OSK_GRID_CELL_H 50
+#define OSK_GRID_X 10
 #define OSK_GRID_Y 60
 
 static void DrawOskCommandList(int* buf, int stride)
