@@ -148,6 +148,13 @@ static const OskGlyph kOskFont[] = {
 
 static const unsigned char* GetOskGlyph(char c)
 {
+   // Case-insensitive lookup: the font only has one glyph shape per letter
+   // (kOskFont stores uppercase) -- at 5x7 there's no meaningful visual
+   // case distinction anyway. The OSK grid's lower/upper distinction is a
+   // real one (real Shift+letter, see OskGridCellChar) tracked in which
+   // *character* gets typed, not in which glyph gets drawn.
+   if (c >= 'a' && c <= 'z')
+      c = (char)(c - ('a' - 'A'));
    for (size_t i = 0; i < sizeof(kOskFont) / sizeof(kOskFont[0]); ++i)
       if (kOskFont[i].c == c)
          return kOskFont[i].rows;
@@ -197,7 +204,7 @@ static void OskDrawFilledRect(int* buf, int stride, int x, int y, int w, int h, 
 }
 
 // On-screen keyboard state and drawing -- see the font comment above.
-enum OskMode { OSK_MODE_COMMANDS = 0 };
+enum OskMode { OSK_MODE_COMMANDS = 0, OSK_MODE_GRID = 1 };
 static bool osk_open_ = false;
 static OskMode osk_mode_ = OSK_MODE_COMMANDS;
 static int osk_command_index_ = 0;
@@ -226,6 +233,72 @@ static const OskCommand kOskCommands[] = {
 };
 #define OSK_NUM_COMMANDS (int)(sizeof(kOskCommands) / sizeof(kOskCommands[0]))
 
+// Option B: free-text grid, for the filenames/text-adventure input the
+// curated command list above can't cover. Laid out by the CPC's REAL
+// hardware matrix -- row r is matrix line r+2, column is the bit within
+// that line -- not an alphabetical or QWERTY-guess re-sort. Lines 0-1
+// (cursor keys, F-keys, numpad) hold nothing typable and are skipped
+// entirely; a few bits within lines 2-8 are non-character keys (Clr, F4,
+// Shift, Ctrl, Esc, Tab, CapsLock) and are left as empty cells. `shifted`
+// is 0 where the real key has no shifted character; for letters it's the
+// uppercase form -- a real Shift+letter, unlike the curated-command path
+// above (ArmAutorun/kAutorunKeys hardcode every letter unshifted, since
+// AMSDOS filenames are case-insensitive and never needed uppercase; this
+// grid presses the matrix directly, so it isn't limited the same way).
+// `special` overrides both and draws a text label instead of one glyph,
+// for the two non-character actions worth having (Enter, Delete).
+struct OskGridCell { int line; int bit; char unshifted; char shifted; const char* special; };
+#define OSK_GRID_ROWS 8
+#define OSK_GRID_COLS 8
+static const OskGridCell kOskGrid[OSK_GRID_ROWS][OSK_GRID_COLS] = {
+   // line 2: Clr [{ Return ]} F4 Shift `\ Ctrl
+   { {0,0,0,0,nullptr}, {2,1,'[',0,nullptr}, {2,2,0,0,"RET"}, {2,3,']',0,nullptr},
+     {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {2,6,'\\',0,nullptr}, {0,0,0,0,nullptr} },
+   // line 3: ^(caret) =- @| P +; *: ?/ >,
+   { {3,0,0,'^',nullptr}, {3,1,'-','=',nullptr}, {3,2,'@','|',nullptr}, {3,3,'p',0,nullptr},
+     {3,4,';','+',nullptr}, {3,5,':','*',nullptr}, {3,6,'/','?',nullptr}, {3,7,'.','>',nullptr} },
+   // line 4: _0 )9 O I L K M <.
+   { {4,0,'0','_',nullptr}, {4,1,'9',')',nullptr}, {4,2,'o','O',nullptr}, {4,3,'i','I',nullptr},
+     {4,4,'l','L',nullptr}, {4,5,'k','K',nullptr}, {4,6,'m','M',nullptr}, {4,7,',','<',nullptr} },
+   // line 5: (8 '7 U Y H J N Space
+   { {5,0,'8','(',nullptr}, {5,1,'7','\'',nullptr}, {5,2,'u','U',nullptr}, {5,3,'y','Y',nullptr},
+     {5,4,'h','H',nullptr}, {5,5,'j','J',nullptr}, {5,6,'n','N',nullptr}, {5,7,0,0,"SPC"} },
+   // line 6: &6 %5 R T G F B V
+   { {6,0,'6','&',nullptr}, {6,1,'5','%',nullptr}, {6,2,'r','R',nullptr}, {6,3,'t','T',nullptr},
+     {6,4,'g','G',nullptr}, {6,5,'f','F',nullptr}, {6,6,'b','B',nullptr}, {6,7,'v','V',nullptr} },
+   // line 7: $4 #3 E W S D C X
+   { {7,0,'4','$',nullptr}, {7,1,'3','#',nullptr}, {7,2,'e','E',nullptr}, {7,3,'w','W',nullptr},
+     {7,4,'s','S',nullptr}, {7,5,'d','D',nullptr}, {7,6,'c','C',nullptr}, {7,7,'x','X',nullptr} },
+   // line 8: !1 "2 Esc Q Tab A CapsLock Z
+   { {8,0,'1','!',nullptr}, {8,1,'2','"',nullptr}, {0,0,0,0,nullptr}, {8,3,'q','Q',nullptr},
+     {0,0,0,0,nullptr}, {8,5,'a','A',nullptr}, {0,0,0,0,nullptr}, {8,7,'z','Z',nullptr} },
+   // line 9: Joy0Up Joy0Down Joy0Left Joy0Right Joy0Fire1 Joy0Fire2 unused Del
+   { {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {0,0,0,0,nullptr},
+     {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {0,0,0,0,nullptr}, {9,7,0,0,"DEL"} },
+};
+
+static bool OskGridCellEmpty(int row, int col)
+{
+   const OskGridCell& c = kOskGrid[row][col];
+   return c.unshifted == 0 && c.shifted == 0 && c.special == nullptr;
+}
+
+static int osk_grid_row_ = 3; // starts on line 5 ('h'), a populated cell near the panel centre
+static int osk_grid_col_ = 4;
+static bool osk_shift_ = false;
+
+// Which of a cell's two characters is currently selected -- the shift
+// toggle when both exist, and whichever one exists when only one does
+// (e.g. '^' only has a shifted form in kOskGrid, so it shows/types
+// regardless of the toggle). Shared by drawing and by the actual key
+// press so what's on screen always matches what gets typed.
+static char OskGridCellChar(const OskGridCell& c)
+{
+   if (c.special != nullptr)
+      return 0;
+   return (osk_shift_ && c.shifted != 0) ? c.shifted : (c.unshifted != 0 ? c.unshifted : c.shifted);
+}
+
 // Panel geometry in the SAME post-crop coordinate space OskDrawText uses.
 // Sized against the smaller "normal" border crop (640x480) so it never
 // overflows in the "full" border mode either.
@@ -235,10 +308,13 @@ static const OskCommand kOskCommands[] = {
 #define OSK_ROW_H 26
 #define OSK_TEXT_SCALE 2
 
-static void DrawOskPanel(int* buf, int stride, int w, int h)
+#define OSK_GRID_CELL_W 40
+#define OSK_GRID_CELL_H 40
+#define OSK_GRID_X 60
+#define OSK_GRID_Y 60
+
+static void DrawOskCommandList(int* buf, int stride)
 {
-   if (!osk_open_)
-      return;
    const int panel_h = OSK_NUM_COMMANDS * OSK_ROW_H + 12;
    OskDrawFilledRect(buf, stride, OSK_PANEL_X, OSK_PANEL_Y, OSK_PANEL_W, panel_h, 0xE0101018u);
    for (int i = 0; i < OSK_NUM_COMMANDS; ++i)
@@ -248,6 +324,47 @@ static void DrawOskPanel(int* buf, int stride, int w, int h)
          OskDrawFilledRect(buf, stride, OSK_PANEL_X + 4, row_y - 2, OSK_PANEL_W - 8, OSK_ROW_H - 2, 0xFF3050A0u);
       OskDrawText(buf, stride, OSK_PANEL_X + 10, row_y, OSK_TEXT_SCALE, 0xFFE8E8E8u, kOskCommands[i].label);
    }
+}
+
+static void DrawOskGrid(int* buf, int stride)
+{
+   const int panel_w = OSK_GRID_COLS * OSK_GRID_CELL_W + 20;
+   const int panel_h = OSK_GRID_ROWS * OSK_GRID_CELL_H + 50;
+   OskDrawFilledRect(buf, stride, OSK_GRID_X - 10, OSK_GRID_Y - 10, panel_w, panel_h, 0xE0101018u);
+   for (int row = 0; row < OSK_GRID_ROWS; ++row)
+   {
+      for (int col = 0; col < OSK_GRID_COLS; ++col)
+      {
+         if (OskGridCellEmpty(row, col))
+            continue;
+         const int cx = OSK_GRID_X + col * OSK_GRID_CELL_W;
+         const int cy = OSK_GRID_Y + row * OSK_GRID_CELL_H;
+         if (row == osk_grid_row_ && col == osk_grid_col_)
+            OskDrawFilledRect(buf, stride, cx, cy, OSK_GRID_CELL_W - 4, OSK_GRID_CELL_H - 4, 0xFF3050A0u);
+         const OskGridCell& c = kOskGrid[row][col];
+         if (c.special != nullptr)
+         {
+            OskDrawText(buf, stride, cx + 2, cy + 12, 1, 0xFFE8E8E8u, c.special);
+         }
+         else
+         {
+            const char text[2] = { OskGridCellChar(c), '\0' };
+            OskDrawText(buf, stride, cx + 12, cy + 8, 2, 0xFFE8E8E8u, text);
+         }
+      }
+   }
+   const int hint_y = OSK_GRID_Y + OSK_GRID_ROWS * OSK_GRID_CELL_H + 4;
+   OskDrawText(buf, stride, OSK_GRID_X, hint_y, 1, osk_shift_ ? 0xFF60FF60u : 0xFF808080u, "SHIFT");
+}
+
+static void DrawOskPanel(int* buf, int stride, int w, int h)
+{
+   if (!osk_open_)
+      return;
+   if (osk_mode_ == OSK_MODE_GRID)
+      DrawOskGrid(buf, stride);
+   else
+      DrawOskCommandList(buf, stride);
 }
 
 // Display
@@ -1675,9 +1792,88 @@ void retro_reset(void)
 // core at all. All edges are debounced (only the press transition acts),
 // otherwise a held button would race through the whole list/retrigger
 // every frame.
+// Option B key press: a small state machine parallel to (not sharing state
+// with) TickAutorun above -- deliberately separate rather than a refactor
+// of the proven autorun path, and driven directly by (line, bit, shift)
+// instead of a character, which is what lets it do a real Shift+letter
+// (ArmAutorun/kAutorunKeys hardcode every letter unshifted and structurally
+// can't). Same staggered-phase reasoning as TickAutorun: the CPC's
+// keyboard scan only registers one new transition per scan, so a shifted
+// press needs shift asserted a step before the key itself.
+enum OskKeyPressState { OSK_KEY_IDLE, OSK_KEY_PRE_SHIFT, OSK_KEY_PRESS, OSK_KEY_POST_SHIFT, OSK_KEY_RELEASE };
+static OskKeyPressState osk_key_state_ = OSK_KEY_IDLE;
+static int osk_key_timer_ = 0;
+static int osk_key_line_ = -1, osk_key_bit_ = -1;
+static bool osk_key_shift_ = false;
+
+static void OskPressKey(int line, int bit, bool want_shift)
+{
+   if (osk_key_state_ != OSK_KEY_IDLE)
+      return; // still finishing a previous press -- confirm is edge-triggered so this shouldn't happen
+   osk_key_line_ = line;
+   osk_key_bit_ = bit;
+   osk_key_shift_ = want_shift;
+   osk_key_state_ = want_shift ? OSK_KEY_PRE_SHIFT : OSK_KEY_PRESS;
+   osk_key_timer_ = autorun_phase_frames_; // same tuning as the autorun typist
+}
+
+static void TickOskKeyPress(unsigned char matrix[10])
+{
+   if (osk_key_state_ == OSK_KEY_IDLE)
+      return;
+   switch (osk_key_state_)
+   {
+   case OSK_KEY_PRE_SHIFT:
+      matrix[2] &= ~(1 << 5);
+      if (--osk_key_timer_ <= 0) { osk_key_state_ = OSK_KEY_PRESS; osk_key_timer_ = autorun_phase_frames_; }
+      break;
+   case OSK_KEY_PRESS:
+      matrix[osk_key_line_] &= ~(1 << osk_key_bit_);
+      if (osk_key_shift_) matrix[2] &= ~(1 << 5);
+      if (--osk_key_timer_ <= 0)
+      {
+         osk_key_state_ = osk_key_shift_ ? OSK_KEY_POST_SHIFT : OSK_KEY_RELEASE;
+         osk_key_timer_ = autorun_phase_frames_;
+      }
+      break;
+   case OSK_KEY_POST_SHIFT:
+      matrix[2] &= ~(1 << 5); // key released, shift still held
+      if (--osk_key_timer_ <= 0) { osk_key_state_ = OSK_KEY_RELEASE; osk_key_timer_ = autorun_phase_frames_; }
+      break;
+   case OSK_KEY_RELEASE:
+      if (--osk_key_timer_ <= 0)
+         osk_key_state_ = OSK_KEY_IDLE;
+      break;
+   default:
+      break;
+   }
+}
+
+// Steps the grid cursor in one direction, skipping empty cells, wrapping
+// at the grid edges. Bounded to one full sweep so a grid with no populated
+// cells in that direction (shouldn't happen -- every row/column here has
+// at least one) can't loop forever.
+static void OskGridStep(int drow, int dcol)
+{
+   int row = osk_grid_row_;
+   int col = osk_grid_col_;
+   for (int tries = 0; tries < OSK_GRID_ROWS * OSK_GRID_COLS; ++tries)
+   {
+      row = (row + drow + OSK_GRID_ROWS) % OSK_GRID_ROWS;
+      col = (col + dcol + OSK_GRID_COLS) % OSK_GRID_COLS;
+      if (!OskGridCellEmpty(row, col))
+      {
+         osk_grid_row_ = row;
+         osk_grid_col_ = col;
+         return;
+      }
+   }
+}
+
 static void TickOsk()
 {
-   static bool prev_start = false, prev_up = false, prev_down = false, prev_confirm = false, prev_cancel = false;
+   static bool prev_start = false, prev_up = false, prev_down = false, prev_left = false, prev_right = false;
+   static bool prev_confirm = false, prev_cancel = false, prev_switch = false, prev_shift_btn = false;
 
    const bool start = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
    if (start && !prev_start)
@@ -1686,43 +1882,85 @@ static void TickOsk()
 
    if (!osk_open_)
    {
-      prev_up = prev_down = prev_confirm = prev_cancel = false;
+      prev_up = prev_down = prev_left = prev_right = false;
+      prev_confirm = prev_cancel = prev_switch = prev_shift_btn = false;
       return;
    }
 
    const bool up = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP);
    const bool down = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN);
+   const bool left = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT);
+   const bool right = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT);
    const bool confirm = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A);
    const bool cancel = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B);
+   const bool switch_panel = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y);
+   const bool shift_btn = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X);
 
-   if (up && !prev_up)
-      osk_command_index_ = (osk_command_index_ + OSK_NUM_COMMANDS - 1) % OSK_NUM_COMMANDS;
-   if (down && !prev_down)
-      osk_command_index_ = (osk_command_index_ + 1) % OSK_NUM_COMMANDS;
+   if (switch_panel && !prev_switch)
+      osk_mode_ = (osk_mode_ == OSK_MODE_COMMANDS) ? OSK_MODE_GRID : OSK_MODE_COMMANDS;
 
-   if (confirm && !prev_confirm)
+   if (osk_mode_ == OSK_MODE_COMMANDS)
    {
-      // Busy-check: an OSK selection during the ~3s post-load autorun wait
-      // would otherwise silently eat the pending media autorun (ArmAutorun
-      // just overwrites autorun_sequence_/autorun_state_ unconditionally).
-      if (autorun_state_ == AUTORUN_IDLE || autorun_state_ == AUTORUN_DONE)
+      if (up && !prev_up)
+         osk_command_index_ = (osk_command_index_ + OSK_NUM_COMMANDS - 1) % OSK_NUM_COMMANDS;
+      if (down && !prev_down)
+         osk_command_index_ = (osk_command_index_ + 1) % OSK_NUM_COMMANDS;
+
+      if (confirm && !prev_confirm)
       {
-         if (log_cb != nullptr)
-            log_cb(RETRO_LOG_INFO, "OSK: command %d selected, typing \"%s\".\n", osk_command_index_, kOskCommands[osk_command_index_].typed);
-         const int saved_wait = autorun_wait_frames_;
-         autorun_wait_frames_ = 2; // nothing to wait for -- the user is already looking at the panel
-         ArmAutorun(kOskCommands[osk_command_index_].typed);
-         autorun_wait_frames_ = saved_wait;
+         // Busy-check: an OSK selection during the ~3s post-load autorun
+         // wait would otherwise silently eat the pending media autorun
+         // (ArmAutorun overwrites autorun_sequence_/autorun_state_
+         // unconditionally).
+         if (autorun_state_ == AUTORUN_IDLE || autorun_state_ == AUTORUN_DONE)
+         {
+            if (log_cb != nullptr)
+               log_cb(RETRO_LOG_INFO, "OSK: command %d selected, typing \"%s\".\n", osk_command_index_, kOskCommands[osk_command_index_].typed);
+            const int saved_wait = autorun_wait_frames_;
+            autorun_wait_frames_ = 2; // nothing to wait for -- the user is already looking at the panel
+            ArmAutorun(kOskCommands[osk_command_index_].typed);
+            autorun_wait_frames_ = saved_wait;
+         }
+         osk_open_ = false;
       }
-      osk_open_ = false;
    }
+   else // OSK_MODE_GRID
+   {
+      if (up && !prev_up)      OskGridStep(-1, 0);
+      if (down && !prev_down)  OskGridStep(1, 0);
+      if (left && !prev_left)  OskGridStep(0, -1);
+      if (right && !prev_right) OskGridStep(0, 1);
+      if (shift_btn && !prev_shift_btn)
+         osk_shift_ = !osk_shift_;
+
+      if (confirm && !prev_confirm)
+      {
+         const OskGridCell& c = kOskGrid[osk_grid_row_][osk_grid_col_];
+         // Real shift state needed to produce the character actually shown
+         // for this cell -- not just "is the toggle on": a shifted-only
+         // key (e.g. '^') always needs shift regardless of the toggle, and
+         // an unshifted-only key (e.g. 'p') never does.
+         const bool want_shift = (c.special == nullptr) && (OskGridCellChar(c) == c.shifted) && (c.shifted != 0);
+         if (log_cb != nullptr)
+            log_cb(RETRO_LOG_INFO, "OSK grid: pressing line %d bit %d (shift=%d).\n", c.line, c.bit, (int)want_shift);
+         OskPressKey(c.line, c.bit, want_shift);
+         // Panel stays open -- typing more than one character is the
+         // entire point of the free-text grid, unlike the one-shot
+         // command list.
+      }
+   }
+
    if (cancel && !prev_cancel)
       osk_open_ = false;
 
    prev_up = up;
    prev_down = down;
+   prev_left = left;
+   prev_right = right;
    prev_confirm = confirm;
    prev_cancel = cancel;
+   prev_switch = switch_panel;
+   prev_shift_btn = shift_btn;
 }
 
 static void update_input(void)
@@ -1880,6 +2118,7 @@ static void update_input(void)
    }
 
    TickAutorun(matrix);
+   TickOskKeyPress(matrix);
 
    static unsigned char prev_matrix[10] = { 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF };
    for (int i = 0; i < 10; ++i)
