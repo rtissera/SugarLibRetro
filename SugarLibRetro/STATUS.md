@@ -66,14 +66,43 @@ Ranked by value:
    default off. Verified end-to-end headless: `PRINT #8,"..."` produced a
    byte-exact captured file when enabled, nothing when disabled.
 
-2. **Tape record/save.** Engine already exposes everything public via
-   `EmulatorEngine::GetTape()`: `SaveAsWav`, `SaveAsCdtDrb`, `SaveAsCSW`,
-   `SaveAsCdtCSW`, `Record()`, `Rewind()`, `IsTapeChanged()`. This was
-   attempted once and reverted because a recorded CDT wouldn't reload after
-   `Rewind()` — worth re-attacking, since the API is a save-as model (not
-   write-back), so the bug is most likely in how libretro.cpp decides *which
-   file* becomes "the tape" after saving, not in the engine. No GPL
-   reference needed — pure wrapper debugging.
+2. ~~**Tape record/save.**~~ **RE-ATTEMPTED AND REVERTED AGAIN (2026-09-08)
+   — moved to Tier 2, this is a real engine bug, not a wrapper bug.**
+   Wired `sugarbox_tape_record` (experimental): arm `InsertBlankTape()` +
+   `Rewind()` + `Record()` at load, `SaveAsCdtCSW()` at unload. Root-caused
+   both problems from the original note with a real crash, not a guess:
+   - **Segfault inside `CTape::Tick()`**, confirmed via `coredumpctl`/gdb
+     backtrace: `retro_run → EmulatorEngine::RunFullSpeed →
+     Motherboard::StartOptimizedPlus<...> → CTape::Tick()`, SIGSEGV. The
+     faulting instruction indexes `tape_array_` with a garbage offset
+     (register held `0x2fffffffd`, i.e. an unsigned value 3 short of a
+     32-bit wraparound, times a small multiplier — a classic unsigned
+     underflow). The recording path's own array-growth code does
+     `sizeof(FluxInversion) * (nb_inversions_ - (tape_position_ + 1))`
+     unsigned arithmetic — on a genuinely **blank** tape (`nb_inversions_`
+     starts at 0), the first inversion trivially makes
+     `tape_position_ + 1 > nb_inversions_`, and that subtraction wraps.
+     **Recording onto an already-populated tape (real content, not
+     `InsertBlankTape()`) did not crash** in the same test — strong
+     supporting evidence for exactly this hypothesis, not proof by itself.
+   - **Separately, even without the crash, the arm/disarm design is wrong.**
+     Arming `Record()` for the whole session (there is no public
+     `StopRecord()` — real hardware requires physically stopping the deck)
+     captured **1.5 million tape inversions in 102 seconds** while replaying
+     a real game's own tape-motor activity, nowhere near our actual typed
+     `SAVE` command finishing. `record_`, once engaged, forces
+     `CTape::Tick()`'s next-event interval to a fixed 4 T-states — i.e. it
+     runs full speed for as long as the motor is on, recording whatever
+     line level it sees, whether or not that's a real guest `SAVE` in
+     progress. A usable wrapper would need a much narrower, motor-transition
+     -driven arm/disarm window, which the current public API gives no clean
+     hook for.
+   Both problems point at CPCCoreEmu, not libretro.cpp: the crash is a real
+   bug in the engine's own (apparently never-before-exercised) recording
+   code, and the missing stop-recording primitive is a real API gap.
+   **Raise both with Thomas** — do not re-attempt from the libretro.cpp side
+   until the engine has a safe record-onto-blank-tape path and a way to end
+   a recording deliberately.
 
 3. **On-screen/virtual keyboard.** Pad-only handheld targets need d-pad
    navigation (pointer-driven overlays are dead on arrival here), no
@@ -93,7 +122,12 @@ Ranked by value:
 
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
-1. **Multiface II full wiring.** `multiface2_` sits under `protected:` in
+1. **Tape record/save.** Real crash in `CTape::Tick()` (unsigned underflow
+   recording onto a blank tape) plus a missing stop-recording primitive —
+   see the retracted Tier-1 entry above for the full root-cause writeup and
+   stack trace. Needs an engine fix before any wrapper attempt makes sense.
+
+2. **Multiface II full wiring.** `multiface2_` sits under `protected:` in
    `Motherboard.h` with no accessor (unlike `play_city_`, which has a public
    `GetPlayCity()` — that asymmetry is exactly why PlayCity could be wired
    without Thomas and Multiface can't). Needs one accessor line
@@ -102,29 +136,29 @@ Ranked by value:
    Reference (read-only): Caprice32 standalone — the only working
    implementation among everything surveyed.
 
-2. **Plain DSK / RAW / CTRAW disk write.** All three `SaveDisk()` overrides
+3. **Plain DSK / RAW / CTRAW disk write.** All three `SaveDisk()` overrides
    return `NOT_IMPLEMENTED` in the engine. Needs a real write algorithm
    added to CPCCoreEmu (most `.dsk` in the wild are EDSK anyway, which
    already works — lower real-world urgency than it looks).
    Reference (read-only): CPCEC's `cpcec-d7.h` — full worked algorithm incl.
    in-place `MV → EXTENDED` conversion. GPL-3.0, reimplement clean-room only.
 
-3. **AMX/Kempston mouse.** Confirmed zero mouse abstraction anywhere in
+4. **AMX/Kempston mouse.** Confirmed zero mouse abstraction anywhere in
    CPCCoreEmu (grepped `IJoystick`/`IMouse`/`Kempston`/`AMX` — no hits). Not
    a wiring gap like PlayCity/Multiface, a genuine from-scratch port-decode
    class. No cleanly adaptable reference — ACE-DL/RVM are closed binaries,
    Arnold/JavaCPC are GPL. Lowest ROI of the engine-side items.
 
-4. **Second lightgun port / dual-joystick Y-cable.** `CRTC` holds one
+5. **Second lightgun port / dual-joystick Y-cable.** `CRTC` holds one
    global `gun_x_`/`gun_y_`/`gun_button_` — no per-player state, so a second
    gun needs an engine change, not just a second libretro device slot.
 
-5. **`retro_serialize()` side-effect-free save.** No synchronous
+6. **`retro_serialize()` side-effect-free save.** No synchronous
    `SaveSnapshot` path in the engine; current implementation ticks the
    emulator (`RunUntilSnapshotWritten`), which violates the libretro
    contract.
 
-6. **`Z84C30::In()` empty stub.** PlayCity's CTC always reads back the
+7. **`Z84C30::In()` empty stub.** PlayCity's CTC always reads back the
    floating bus (255) — small, already flagged upstream-worthy alongside
    the above.
 
