@@ -928,8 +928,15 @@ static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
    // A disk's autorun is armed from the FDC's DEFERRED load, which completes
    // inside retro_run -- i.e. after retro_load_game has already armed the
    // test hook. Without this the media command would silently overwrite it.
+   // One-shot: it suppresses the load the hook was armed for, and nothing
+   // else. Clearing it here rather than leaving it set means a later disc
+   // swap (M3U, disk-control) still autoruns normally, and the flag cannot
+   // leak into the next retro_load_game of the same process.
    if (test_hook_armed_)
+   {
+      test_hook_armed_ = false;
       return;
+   }
    if (drive_number > 0)
       return; // B: is a second disc, not the one we boot from
    if (drive_number < 0)

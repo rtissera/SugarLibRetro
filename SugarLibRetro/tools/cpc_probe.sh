@@ -20,6 +20,17 @@
 # BASIC is uppercased by the core, so lowercase input is fine. Everything the
 # typist can reach is in kAutorunKeys (letters, digits, and the punctuation
 # BASIC and AMSDOS need).
+#
+# All-zero is the "typing has not finished yet" sentinel, so a probe whose real
+# answer is zero can never succeed -- it just times out and exits 1, which
+# looks like a broken tool rather than a valid result. When zero is a possible
+# answer, POKE a separate done-flag and poll that instead:
+#
+#   tools/cpc_probe.sh ... 'POKE &8000,<expr>:POKE &8001,1' 8000 2
+#   -> "00 01"   a real zero, with the trailing 1 proving the POKE ran
+#
+# Reading the flag in the same range keeps the result non-zero, so the wait
+# terminates and the answer still comes back in one call.
 set -u
 
 CORE=${1:?core .so}
