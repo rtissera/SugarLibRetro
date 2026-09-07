@@ -1882,6 +1882,18 @@ static void TickOsk()
    static bool prev_start = false, prev_up = false, prev_down = false, prev_left = false, prev_right = false;
    static bool prev_confirm = false, prev_cancel = false, prev_switch = false, prev_shift_btn = false;
 
+   // GX4000 is a games console -- no physical keyboard exists to have an
+   // on-screen one of. Force-closed rather than merely leaving START
+   // unbound, in case a session switches into gx4000 while the panel
+   // happens to already be open.
+   if (last_applied_model_ == "gx4000")
+   {
+      osk_open_ = false;
+      prev_start = prev_up = prev_down = prev_left = prev_right = false;
+      prev_confirm = prev_cancel = prev_switch = prev_shift_btn = false;
+      return;
+   }
+
    const bool start = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
    if (start && !prev_start)
       osk_open_ = !osk_open_;
