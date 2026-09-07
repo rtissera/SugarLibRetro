@@ -290,11 +290,61 @@ static const OskGridCell kOskGrid[OSK_GRID_ROWS][OSK_GRID_COLS] = {
    // Row 5: Ctrl Copy Space
    { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
 };
+
+// French equivalent, SAME (line,bit) per cell as kOskGrid above -- the
+// physical keyboard wiring doesn't change between ROM languages, only
+// what character a position produces (see kAutorunKeysFR's comment for
+// how this was measured). Cells this project couldn't confirm (either
+// untested, or the real French character is accented and unrepresentable
+// in kOskFont's ASCII glyph set -- é/è/à/ç/ù) are left with only the
+// confirmed half of the pair, or empty -- never guessed. A cell with only
+// one confirmed character shows/types that one regardless of the shift
+// toggle (OskGridCellChar's existing fallback), which is honest: it means
+// "this is the only thing this project verified this key produces",
+// not "this key has no other function".
+static const OskGridCell kOskGridFR[OSK_GRID_ROWS][OSK_GRID_COLS] = {
+   // Row 1: real AZERTY digit row inverts UK's convention -- unshifted
+   // gives a symbol (or an accented character this font can't draw),
+   // Shift gives the digit. Confirmed directly for 0,2,3,4,5; the rest
+   // follow the same confirmed pattern.
+   { {8,2,0,0,"ESC"}, {8,0,'&','1',nullptr}, {8,1,'2','2',nullptr}, {7,1,'"','3',nullptr},
+     {7,0,'\'','4',nullptr}, {6,1,'(','5',nullptr}, {6,0,')','6',nullptr}, {5,1,'7','7',nullptr},
+     {5,0,'!','8',nullptr}, {4,1,'9','9',nullptr}, {4,0,'0','0',nullptr}, {3,1,0,'[',nullptr},
+     {3,0,0,'_',nullptr}, {2,0,0,0,"CLR"}, {9,7,0,0,"DEL"} },
+   // Row 2: only Q<->A's positions actually change here (UK's Q position
+   // -> French 'a'); @ position now gives '^', [ position now gives '*'.
+   { {8,4,0,0,"TAB"}, {8,3,'a','A',nullptr}, {7,3,'z','Z',nullptr}, {7,2,'e','E',nullptr},
+     {6,2,'r','R',nullptr}, {6,3,'t','T',nullptr}, {5,3,'y','Y',nullptr}, {5,2,'u','U',nullptr},
+     {4,3,'i','I',nullptr}, {4,2,'o','O',nullptr}, {3,3,'p','P',nullptr}, {3,2,'^',0,nullptr},
+     {2,1,'*',0,nullptr}, {2,2,0,0,"RET"}, E },
+   // Row 3: UK's A position -> French 'q'; the ':' position -> French
+   // 'm'/'M' (the real AZERTY M relocation); ';' position's unshifted
+   // target is accented (ù) and its shifted target was untested, so it's
+   // left fully empty rather than guessed.
+   { {8,6,0,0,"CAPS"}, {8,5,'q','Q',nullptr}, {7,4,'s','S',nullptr}, {7,5,'d','D',nullptr},
+     {6,5,'f','F',nullptr}, {6,4,'g','G',nullptr}, {5,4,'h','H',nullptr}, {5,5,'j','J',nullptr},
+     {4,5,'k','K',nullptr}, {4,4,'l','L',nullptr}, {3,5,'m','M',nullptr}, E,
+     {2,3,'#',0,nullptr}, E, E },
+   // Row 4: UK's Z position -> French 'w'; M's own position -> French
+   // ',' (M relocated away, per Row 3); comma/period/slash positions all
+   // shift one step per the real AZERTY punctuation cluster.
+   { {8,7,'w','W',nullptr}, {7,7,'x','X',nullptr}, {7,6,'c','C',nullptr}, {6,7,'v','V',nullptr},
+     {6,6,'b','B',nullptr}, {5,6,'n','N',nullptr}, {4,6,',',0,nullptr}, {4,7,';','.',nullptr},
+     {3,7,':','/',nullptr}, {3,6,0,'+',nullptr}, {2,6,'$',0,nullptr}, E, E, E, E },
+   // Row 5: Ctrl/Copy/Space are control keys, not character keys -- same
+   // regardless of ROM language.
+   { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
+};
 #undef E
+
+static const OskGridCell (*ActiveOskGrid())[OSK_GRID_COLS]
+{
+   return (rom_language_ == "fr") ? kOskGridFR : kOskGrid;
+}
 
 static bool OskGridCellEmpty(int row, int col)
 {
-   const OskGridCell& c = kOskGrid[row][col];
+   const OskGridCell& c = ActiveOskGrid()[row][col];
    return c.unshifted == 0 && c.shifted == 0 && c.special == nullptr;
 }
 
@@ -356,7 +406,7 @@ static void DrawOskGrid(int* buf, int stride)
          const int cy = OSK_GRID_Y + row * OSK_GRID_CELL_H;
          if (row == osk_grid_row_ && col == osk_grid_col_)
             OskDrawFilledRect(buf, stride, cx, cy, OSK_GRID_CELL_W - 4, OSK_GRID_CELL_H - 4, 0xFF3050A0u);
-         const OskGridCell& c = kOskGrid[row][col];
+         const OskGridCell& c = ActiveOskGrid()[row][col];
          if (c.special != nullptr)
          {
             OskDrawText(buf, stride, cx + 2, cy + 12, 1, 0xFFE8E8E8u, c.special);
@@ -738,6 +788,59 @@ static const AutorunKey kAutorunKeys[] = {
    { '$', 7, 0, true }, { '#', 7, 1, true }, { '^', 3, 0, true },
 };
 
+// French equivalent of kAutorunKeys above: which UK matrix position to
+// press so the FRENCH OS ROM (sugarbox_rom_language=fr) echoes the given
+// character. Confirmed empirically, not derived by symmetry: typed known
+// UK positions under French firmware and read the real echo back (see
+// project_sugarbox_osk_survey.md memory file for the full probe
+// transcript). This is a genuine firmware AZERTY remap, not a keycap
+// relabel -- pressing UK's own 'a' position (8,5) under French firmware
+// echoes 'q', so to make French firmware print 'a' you press UK's 'q'
+// position (8,3) instead.
+//
+// Confirmed pattern: only A/Q, W/Z swap and M relocates to UK's ':'
+// position (real classic AZERTY shape) -- the other 21 letters are
+// unchanged, same position as kAutorunKeys. The whole digit row needs
+// Shift added to its own normal position (unshifted gives an accented
+// character/symbol instead, matching real AZERTY keyboards, where digits
+// live on the shifted state of the same keys). Confirmed directly for
+// 0, 2, 3, 4, 5; 1, 6, 7, 8, 9 follow the same confirmed pattern but
+// weren't individually re-verified.
+//
+// Deliberately NOT in this table (left as gaps, TickAutorun already
+// skips unknown characters rather than typing garbage): '|' (needed by
+// half the curated commands -- |TAPE/|CPM/|A/|B -- so those specifically
+// don't work under French ROM; CAT/RUN"/NEW/LIST/CLS/MODE 0-2 use only
+// characters this table does cover and work fine), '@ - = \ % ? > <',
+// and every accented letter (é/è/à/ç/ù) -- those aren't representable in
+// kOskFont's ASCII glyph set at all yet, a separate gap from this table.
+static const AutorunKey kAutorunKeysFR[] = {
+   // Letters -- only A/Q, W/Z, M actually move; the other 21 keep
+   // kAutorunKeys' own position.
+   { 'A', 8, 3, false }, { 'B', 6, 6, false }, { 'C', 7, 6, false },
+   { 'D', 7, 5, false }, { 'E', 7, 2, false }, { 'F', 6, 5, false },
+   { 'G', 6, 4, false }, { 'H', 5, 4, false }, { 'I', 4, 3, false },
+   { 'J', 5, 5, false }, { 'K', 4, 5, false }, { 'L', 4, 4, false },
+   { 'M', 3, 5, false }, { 'N', 5, 6, false }, { 'O', 4, 2, false },
+   { 'P', 3, 3, false }, { 'Q', 8, 5, false }, { 'R', 6, 2, false },
+   { 'S', 7, 4, false }, { 'T', 6, 3, false }, { 'U', 5, 2, false },
+   { 'V', 6, 7, false }, { 'W', 8, 7, false }, { 'X', 7, 7, false },
+   { 'Y', 5, 3, false }, { 'Z', 7, 3, false },
+   // Digits -- Shift added to the digit's own normal position.
+   { '0', 4, 0, true }, { '1', 8, 0, true }, { '2', 8, 1, true },
+   { '3', 7, 1, true }, { '4', 7, 0, true }, { '5', 6, 1, true },
+   { '6', 6, 0, true }, { '7', 5, 1, true }, { '8', 5, 0, true },
+   { '9', 4, 1, true },
+   { ' ',  5, 7, false }, { '\r', 2, 2, false },
+   // Punctuation, all confirmed empirically -- see the probe transcript.
+   { ',', 4, 6, false }, { ';', 4, 7, false }, { '.', 4, 7, true },
+   { ':', 3, 7, false }, { '/', 3, 7, true },  { '!', 5, 0, false },
+   { '&', 8, 0, false }, { '(', 6, 1, false }, { ')', 6, 0, false },
+   { '"', 7, 1, false }, { '\'', 7, 0, false }, { '+', 3, 6, true },
+   { '^', 3, 2, false }, { '_', 3, 0, true },  { '*', 2, 1, false },
+   { '#', 2, 3, false }, { '$', 2, 6, false }, { '[', 3, 1, true },
+};
+
 // Filled by ArmAutorun(); "RUN\"<file>\r", "|CPM\r", "CAT\r" or "RUN\"\r".
 // Sized for the test hook's BASIC one-liners, not just an AMSDOS filename.
 static char autorun_sequence_[256] = { 0 };
@@ -765,17 +868,21 @@ static void ArmAutorun(const char* command)
 {
    if (command == nullptr || *command == '\0')
       return;
-   // kAutorunKeys presses UK matrix positions. Confirmed empirically
-   // (screenshot, same raw (8,5) press): the French OS ROM is a real
-   // firmware AZERTY remap, not a keycap relabel -- UK 'a' echoes 'q'
-   // under it. Typing "RUN\"DISC\"" this way came out as `run2disc` ->
-   // Syntax error. Failing safe (skip the keystrokes, log why) beats
-   // failing loud (garbled autorun the user has no reason to suspect ROM
-   // language caused) until a real FR-position character table exists.
-   if (rom_language_ != "uk")
+   // kAutorunKeys presses UK matrix positions; kAutorunKeysFR is the real,
+   // empirically-confirmed French equivalent (see its own comment). Any
+   // OTHER rom_language_ value has no table at all -- fail safe (skip,
+   // log why) rather than type wrong characters, same reasoning that
+   // caught the real "RUN\"DISC\"" -> `run2disc` -> Syntax error
+   // regression this gate was added for in the first place.
+   // SUGARLIBRETRO_FORCE_TYPE bypasses this for exactly the reverse-
+   // engineering job that built kAutorunKeysFR: typing known UK positions
+   // under a non-UK ROM and reading the real echoed character back
+   // (screenshot or printer capture) is how a per-language table gets
+   // built, not guessed.
+   if (rom_language_ != "uk" && rom_language_ != "fr" && getenv("SUGARLIBRETRO_FORCE_TYPE") == nullptr)
    {
       if (log_cb != nullptr)
-         log_cb(RETRO_LOG_WARN, "Autorun/typed-command skipped: sugarbox_rom_language=%s remaps the keyboard at firmware level and kAutorunKeys assumes UK positions -- typing would produce wrong characters.\n", rom_language_.c_str());
+         log_cb(RETRO_LOG_WARN, "Autorun/typed-command skipped: sugarbox_rom_language=%s has no character table -- typing would produce wrong characters.\n", rom_language_.c_str());
       return;
    }
    size_t i = 0;
@@ -815,9 +922,15 @@ static void TickAutorun(unsigned char matrix[10])
    }
 
    const AutorunKey* key = nullptr;
-   for (size_t i = 0; i < sizeof(kAutorunKeys) / sizeof(kAutorunKeys[0]); ++i)
+   if (rom_language_ == "fr")
    {
-      if (kAutorunKeys[i].c == c) { key = &kAutorunKeys[i]; break; }
+      for (size_t i = 0; i < sizeof(kAutorunKeysFR) / sizeof(kAutorunKeysFR[0]); ++i)
+         if (kAutorunKeysFR[i].c == c) { key = &kAutorunKeysFR[i]; break; }
+   }
+   else
+   {
+      for (size_t i = 0; i < sizeof(kAutorunKeys) / sizeof(kAutorunKeys[0]); ++i)
+         if (kAutorunKeys[i].c == c) { key = &kAutorunKeys[i]; break; }
    }
    if (key == nullptr)
    {
@@ -1913,14 +2026,12 @@ static void TickOsk()
    // unbound, in case a session switches into gx4000 while the panel
    // happens to already be open.
    //
-   // sugarbox_rom_language != "uk": every label in both panels (command
-   // list and grid) is the character UK firmware echoes for that matrix
-   // position -- confirmed empirically that French firmware remaps the
-   // SAME position to a different character (real AZERTY, not a keycap
-   // relabel). Until a real FR-position table exists, the panel would
-   // show correct-looking labels that type the wrong thing, which is
-   // worse than not offering it at all.
-   if (last_applied_model_ == "gx4000" || rom_language_ != "uk")
+   // Any ROM language without a table (kAutorunKeys for uk, kAutorunKeysFR
+   // / kOskGridFR for fr) would show correct-looking labels that type the
+   // wrong thing -- worse than not offering the panel at all. uk and fr
+   // both have one now; ActiveOskGrid()/TickOsk's confirm handler below
+   // already pick the right table via rom_language_.
+   if (last_applied_model_ == "gx4000" || (rom_language_ != "uk" && rom_language_ != "fr"))
    {
       osk_open_ = false;
       prev_start = prev_up = prev_down = prev_left = prev_right = false;
@@ -1988,7 +2099,7 @@ static void TickOsk()
 
       if (confirm && !prev_confirm)
       {
-         const OskGridCell& c = kOskGrid[osk_grid_row_][osk_grid_col_];
+         const OskGridCell& c = ActiveOskGrid()[osk_grid_row_][osk_grid_col_];
          // Real shift state needed to produce the character actually shown
          // for this cell -- not just "is the toggle on": a shifted-only
          // key (e.g. '^') always needs shift regardless of the toggle, and
