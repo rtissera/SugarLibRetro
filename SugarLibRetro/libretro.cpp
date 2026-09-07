@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <unistd.h>
 
 //#define WIDTH  768
 #define WIDTH  640
@@ -813,6 +814,7 @@ static RetroSound retro_sound_;
 // upstream Qt app -- feeds a message box; here it just logs so a failed
 // load isn't silently indistinguishable from a working one in the core log).
 static void HandleAutorunForLoadedItem(int load_ok, int drive_number);
+static void ApplyDiskWriteProtect();
 
 class RetroFdcNotify : public IFdcNotify
 {
@@ -830,6 +832,7 @@ public:
       // Autorun, same trigger point and same engine call SugarboxV2's own
       // Emulation::ItemLoaded() uses. Deferred to a helper defined further
       // down, where emulator_/autorun_enabled_ are in scope.
+      ApplyDiskWriteProtect();
       HandleAutorunForLoadedItem(load_ok, drive_number);
    }
    virtual void DiskEject() { PlayFdcSfx(eject_wav, retro_sound_.GetSampleRate()); }
@@ -854,7 +857,24 @@ static RetroDirectories directories_;
 static MachineSettings machine_settings_;
 static RetroFdcNotify fdc_notify_;
 static bool autorun_enabled_ = true;
-static bool disk_write_enabled_ = false;
+// Where a modified disk goes. "sidecar" keeps the user's image pristine and
+// writes changes beside it in the save directory; "overwrite" replaces the
+// original in place; "disabled" discards. Surveying the field, emulators split
+// four ways here -- silent in-place (Caprice Forever, JavaCPC, CPCemu), prompt
+// (Arnold, WinAPE), explicit action only (Caprice32, SugarboxV2) and discard
+// entirely (ACE-DL's shipped default, MAME) -- so there is no single "correct"
+// behaviour to copy. Sidecar is the option that cannot lose data either way,
+// and it follows Caprice Forever, whose source redirects writes for formats it
+// will not overwrite ("// IPF and RAW should not be overwritten").
+enum DiskWriteMode { DISK_WRITE_SIDECAR = 0, DISK_WRITE_DISABLED, DISK_WRITE_OVERWRITE };
+static DiskWriteMode disk_write_mode_ = DISK_WRITE_SIDECAR;
+
+// Emulated write-protect tab, i.e. what the CPC itself sees. Distinct from the
+// above, which only decides whether changes reach the host filesystem. "auto"
+// mirrors the image file's own permissions, which is what Hatari, 1984, CPCemu
+// and Caprice Forever all do.
+enum DiskProtectMode { DISK_PROTECT_AUTO = 0, DISK_PROTECT_ON, DISK_PROTECT_OFF };
+static DiskProtectMode disk_protect_mode_ = DISK_PROTECT_AUTO;
 static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
@@ -1107,7 +1127,8 @@ void retro_set_environment(retro_environment_t cb)
       { "sugarbox_crtc", "CRTC type; auto|0|1|2|3|4" },
       // Off by default: this overwrites the image file in place. Only EDSK
       // is saved -- see MaybeWriteBackDisk.
-      { "sugarbox_disk_write", "Write disk changes back to file (EDSK only); disabled|enabled" },
+      { "sugarbox_disk_write", "Save disk changes (EDSK only); sidecar|disabled|overwrite" },
+      { "sugarbox_disk_write_protect", "Disk write protection; auto|on|off" },
       { NULL, NULL },
    };
 
@@ -1556,7 +1577,21 @@ static void check_variables(void)
    var.key = "sugarbox_disk_write";
    var.value = nullptr;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      disk_write_enabled_ = (strcmp(var.value, "enabled") == 0);
+   {
+      disk_write_mode_ = (strcmp(var.value, "overwrite") == 0) ? DISK_WRITE_OVERWRITE
+                       : (strcmp(var.value, "disabled") == 0) ? DISK_WRITE_DISABLED
+                       : DISK_WRITE_SIDECAR;
+   }
+
+   var.key = "sugarbox_disk_write_protect";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      disk_protect_mode_ = (strcmp(var.value, "on") == 0) ? DISK_PROTECT_ON
+                         : (strcmp(var.value, "off") == 0) ? DISK_PROTECT_OFF
+                         : DISK_PROTECT_AUTO;
+      ApplyDiskWriteProtect();
+   }
 
    var.key = "sugarbox_monitor";
    var.value = nullptr;
@@ -1764,6 +1799,39 @@ static bool EdskHasWeakSectors(const std::string& path)
    return false;
 }
 
+// Push the emulated write-protect tab down to the FDC. "auto" mirrors the
+// image file's own permissions so a read-only file behaves like a
+// write-protected disc -- what Hatari, 1984, CPCemu and Caprice Forever all
+// do; CPCEC reaches the same result by opening "rb+" and falling back to "rb".
+static void ApplyDiskWriteProtect()
+{
+   if (emulator_ == nullptr)
+      return;
+   bool protect = (disk_protect_mode_ == DISK_PROTECT_ON);
+   if (disk_protect_mode_ == DISK_PROTECT_AUTO)
+   {
+      protect = false;
+      if (current_disk_index_ < disk_images_.size() && !disk_images_[current_disk_index_].empty())
+         protect = (access(disk_images_[current_disk_index_].c_str(), W_OK) != 0);
+   }
+   emulator_->GetFDC()->SetWriteProtection(protect, 0);
+}
+
+// Sidecar destination: <save dir>/<image name>.dsk, so the user's own image is
+// never touched and ROM directories (often read-only) are not written into.
+static std::string GetSidecarPath(const std::string& source)
+{
+   const char* dir = nullptr;
+   if (!environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || dir == nullptr || *dir == '\0')
+      dir = "/tmp";
+   const size_t slash = source.find_last_of("/\\");
+   std::string name = (slash == std::string::npos) ? source : source.substr(slash + 1);
+   const size_t dot = name.find_last_of('.');
+   if (dot != std::string::npos)
+      name.erase(dot);
+   return std::string(dir) + "/" + name + ".dsk";
+}
+
 static bool DiskFileIsEdsk(const std::string& path)
 {
    FILE* f = fopen(path.c_str(), "rb");
@@ -1777,7 +1845,7 @@ static bool DiskFileIsEdsk(const std::string& path)
 
 static void MaybeWriteBackDisk(unsigned index)
 {
-   if (!disk_write_enabled_ || emulator_ == nullptr)
+   if (disk_write_mode_ == DISK_WRITE_DISABLED || emulator_ == nullptr)
       return;
    if (index >= disk_images_.size() || disk_images_[index].empty())
       return;
@@ -1785,43 +1853,59 @@ static void MaybeWriteBackDisk(unsigned index)
       return;
 
    const std::string& path = disk_images_[index];
+   const bool sidecar = (disk_write_mode_ == DISK_WRITE_SIDECAR);
+
    if (!DiskFileIsEdsk(path))
    {
+      // Plain DSK ("MV - CPC"), RAW and CTRAW have no writer in the engine at
+      // all (their SaveDisk() returns NOT_IMPLEMENTED), and the flux formats
+      // that do -- HFE, SCP, IPF -- are preservation dumps we will not rewrite.
+      // Either way the engine would save in the source format, so a sidecar
+      // cannot help here: it would just put an unwritable or preservation
+      // format somewhere else.
       if (log_cb != nullptr)
          log_cb(RETRO_LOG_WARN,
-            "Disk '%s' was modified, but this format has no writer in the engine "
-            "(only EDSK is saved); changes discarded.\n", path.c_str());
+            "Disk '%s' was modified, but only EDSK images can be saved; "
+            "changes discarded.\n", path.c_str());
       return;
    }
 
-   if (EdskHasWeakSectors(path))
+   if (EdskHasWeakSectors(path) && !sidecar)
    {
       if (log_cb != nullptr)
          log_cb(RETRO_LOG_WARN,
             "Disk '%s' was modified, but it contains multi-copy (weak) sectors and "
-            "the EDSK writer stores only one copy -- saving would destroy the "
-            "protection. Changes discarded.\n", path.c_str());
+            "the EDSK writer stores only one copy -- overwriting would destroy the "
+            "protection. Changes discarded; set Save disk changes to \"sidecar\" "
+            "to keep them beside the original instead.\n", path.c_str());
       return;
    }
 
-   // SmartOpen() will append ".DSK" unless the path already ends in exactly
-   // that, so this is where the engine puts the file.
+   // SmartOpen() appends ".DSK" unless the path already ends in exactly that
+   // (its extension compare is case-sensitive on Linux), so this is where the
+   // engine actually puts the file.
    const std::string written = (path.size() >= 4 && path.compare(path.size() - 4, 4, ".DSK") == 0)
       ? path : path + ".DSK";
+   const std::string target = sidecar ? GetSidecarPath(path) : path;
+
    emulator_->SaveDisk(0);
 
-   if (written != path)
+   if (written != target && rename(written.c_str(), target.c_str()) != 0)
    {
-      if (rename(written.c_str(), path.c_str()) != 0)
-      {
-         if (log_cb != nullptr)
-            log_cb(RETRO_LOG_ERROR, "Disk '%s': saved to '%s' but could not replace the original.\n",
-               path.c_str(), written.c_str());
-         return;
-      }
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_ERROR, "Disk '%s': saved to '%s' but could not move it to '%s'.\n",
+            path.c_str(), written.c_str(), target.c_str());
+      return;
    }
    if (log_cb != nullptr)
-      log_cb(RETRO_LOG_INFO, "Disk '%s': changes written back.\n", path.c_str());
+   {
+      if (sidecar && EdskHasWeakSectors(path))
+         log_cb(RETRO_LOG_WARN, "Disk '%s': changes saved to '%s'. The original had "
+            "multi-copy (weak) sectors which the copy does not preserve.\n",
+            path.c_str(), target.c_str());
+      else
+         log_cb(RETRO_LOG_INFO, "Disk '%s': changes saved to '%s'.\n", path.c_str(), target.c_str());
+   }
 }
 
 static bool dc_set_eject_state(bool ejected)
