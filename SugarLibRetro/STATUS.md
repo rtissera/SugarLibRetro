@@ -181,15 +181,23 @@ Ranked by value:
    (é/è/à/ç/ù — not representable in `kOskFont`'s ASCII glyph set at all,
    a separate follow-up if ever needed).
 
-7. ~~**Spanish ROM support**~~ **DONE (`3c63d12`)** — `sugarbox_rom_
-   language=sp`, same source/provenance as French. 6128 only (that ROM
-   folder has no Spanish 464 BASIC ROM at all). Real, distinct Spanish
-   machine confirmed via its own region-code banner letter (`(s3)` vs
-   UK's `(v3)`/French's `(f3)`). No character table yet — Spanish's real
-   keyboard differences don't transfer from `kAutorunKeysFR`'s French
-   data, so typing/OSK fail safe on it exactly like French did before its
-   table existed. Building a real `kAutorunKeysSP`/`kOskGridSP` the same
-   empirical way is the natural next step if this is ever picked up.
+7. ~~**Spanish ROM support + real keyboard typing**~~ **DONE (`3c63d12`,
+   `3be8f89`)** — `sugarbox_rom_language=sp`, same source/provenance as
+   French. 6128 only (that ROM folder has no Spanish 464 BASIC ROM at
+   all). Real, distinct Spanish machine confirmed via its own region-code
+   banner letter (`(s3)` vs UK's `(v3)`/French's `(f3)`).
+   `kAutorunKeysSP`/`kOskGridSP` built the same empirical way as French,
+   but the finding is dramatically simpler: the full alphabet, every
+   digit, and nearly every punctuation position echo identically to UK
+   (matches the much smaller 32-byte OS ROM diff vs French's 115 — a
+   Spanish keyboard is QWERTY-based with one added key, not a full AZERTY
+   reshuffle). The one real difference: UK's `:`/`*` position becomes the
+   dedicated Spanish Ñ/ñ key, shown on the grid as an "ENYE" text label
+   (no ñ/Ñ glyph exists in `kOskFont`). Two positions (`^`, `+`) gave
+   unclear echoes and were left at UK values rather than guessed.
+   `RUN"DISC"` boots a real game under Spanish ROM; grid screenshot
+   confirms ENYE lands right after L, exactly where a real Spanish
+   keyboard has it.
 
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
