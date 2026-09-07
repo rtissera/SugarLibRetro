@@ -105,24 +105,21 @@ Ranked by value:
    until the engine has a safe record-onto-blank-tape path and a way to end
    a recording deliberately.
 
-3. **On-screen/virtual keyboard — DESIGN UNDECIDED, surveyed 2026-09-08,
-   not yet implemented.** cap32's is pointer-only (no d-pad path at all,
-   not a template). VICE's is the closest fit: discrete grid, d-pad +
-   wraparound, sticky-shift toggle, plain text via an existing bitmap font.
-   No libretro API shortcut exists for this — every core rolls its own.
-   Two real options on the table, Romain's call which: (1) a curated
-   scrollable command list (~15-20 pre-baked strings through the existing
-   autorun-typist injection path) — zero font rendering needed, doesn't
-   cover free-text filenames; or (2) a full VICE-style grid, alphabetical
-   not QWERTY (nobody touch-types on a d-pad), with a small hand-authored
-   bitmap font (not DOSBox's GPL glyph tables). Full writeup: see memory
-   file `project_sugarbox_osk_survey.md`.
-   Pad-only handheld targets need d-pad navigation either way
-   (pointer-driven overlays are dead on arrival here); no font/glyph system
-   exists in this core today (rectangles only) — real work either way, but
-   100% in libretro.cpp.
-   Reference (read-only, `libretro/` subtree — do not copy): cap32's
-   `retro_keyboard.c` + microui overlay, for layout/UX ideas only.
+3. ~~**On-screen/virtual keyboard**~~ **DONE, both options (`b126952`,
+   `db5ef3a`)** — Romain's call was both, not either/or, with the grid laid
+   out by the real CPC hardware matrix (not alphabetical — nobody
+   touch-types on a d-pad, but QWERTY/AZERTY-from-the-emulated-machine is
+   still the correct identity for each key). START opens/closes; Y switches
+   between the two panels; in the grid, X is a sticky shift toggle
+   (matches VICE from the survey) that produces a real Shift+letter —
+   something the curated-command path's ArmAutorun/kAutorunKeys can't do,
+   since it hardcodes every letter unshifted. First feature in this core
+   needing real pixel verification, which caught a real environment gotcha
+   (RetroArch's window can render larger than the Xvfb screen and get
+   silently clipped by `xwd -root` — see the font comment in libretro.cpp)
+   before it could taint any screenshot-based result. Full writeup incl.
+   font glyphs, grid table derivation, and the state-machine design in
+   `project_sugarbox_osk_survey.md` and the two commit messages.
 
 4. ~~**Combo-keys**~~ **DONE (`96d5319`)** — `sugarbox_combo_l/r/l2/r2`,
    each mapping one shoulder button to Enter/Space/Esc/Delete/Tab/Copy/
