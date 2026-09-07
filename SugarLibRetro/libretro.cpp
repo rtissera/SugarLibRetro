@@ -1890,16 +1890,18 @@ void retro_set_environment(retro_environment_t cb)
       // sugarbox_rom_language below: this is about YOUR keyboard/pad,
       // that is about which machine is emulated.
       { "sugarbox_keyboard_layout", "Host keyboard layout; uk|fr" },
-      // Which OS+BASIC ROM set is emulated. French: 464/6128 (no 664
-      // pair was ever sold). Spanish: 6128 only (no Spanish 464 BASIC ROM
-      // exists in this project's source -- falls back to plain UK 464).
-      // Typing (autorun/OSK) only has a real character table for uk/fr
-      // so far -- sp boots a real Spanish machine but ArmAutorun/the OSK
-      // fail safe (skip, log why) on it the same way they did for fr
-      // before kAutorunKeysFR existed, until a Spanish table is built.
-      // AMSDOS is language-independent, always the same file either way.
-      // See ApplyMachineType for provenance.
-      { "sugarbox_rom_language", "Emulated ROM language; uk|fr|sp" },
+      // Which OS+BASIC ROM set is emulated. French: 464/6128 (no 664 pair
+      // was ever sold). Spanish: 6128 only (no Spanish 464 BASIC ROM in
+      // this project's source). Danish: 464 has a real Danish OS+BASIC
+      // pair, 6128 has Danish OS but falls back to plain UK BASIC (no
+      // Danish 6128 BASIC in this project's source). uk/fr/sp have real
+      // typing tables (kAutorunKeys*) and OSK grids (kOskGrid*); dk boots
+      // a real machine but has no table yet -- ArmAutorun/the OSK fail
+      // safe (skip, log why) on it and on any other value rather than
+      // type wrong characters. AMSDOS is language-independent,
+      // always the same file either way. See ApplyMachineType for
+      // provenance.
+      { "sugarbox_rom_language", "Emulated ROM language; uk|fr|sp|dk" },
       // "green" is the authentic GT65 monochrome monitor the CPC shipped
       // with alongside the CTM644 colour one; amber is a convenience.
       { "sugarbox_monitor", "Monitor; color|green|amber" },
@@ -2441,19 +2443,24 @@ static void ApplyMachineType(const char* model)
    bool fdc_plugged = true;
    const char* cartridge_file = nullptr; // non-null => Plus/GX4000-style cartridge boot
 
-   // French/Spanish ROM sets. Same origin as the UK ROMs already bundled:
-   // SugarboxV2's own ROM folder, whose UK files are byte-for-byte (md5)
-   // identical to the ones this repo already shipped -- the FR/SP pairs
-   // sitting next to them carry the same provenance/redistribution basis
-   // Romain already confirmed for the UK set, not a new sourcing question.
-   // AMSDOS is genuinely language-independent (only one variant exists in
-   // that same ROM folder) -- slot 7 below stays "amsdos.rom" regardless.
-   // 664 has neither (never sold outside UK/DE). 464 has no Spanish BASIC
-   // ROM in that source at all (only "Rom A"/OS exists for 464 (SP)) --
-   // Spanish is 6128-only; falls through to plain UK 464 ROMs otherwise,
-   // same fail-safe posture as an unknown rom_language_ value elsewhere.
+   // French/Spanish/Danish ROM sets. Same origin as the UK ROMs already
+   // bundled: SugarboxV2's own ROM folder, whose UK files are byte-for-byte
+   // (md5) identical to the ones this repo already shipped -- the FR/SP/DK
+   // sets sitting next to them carry the same provenance/redistribution
+   // basis Romain already confirmed for the UK set, not a new sourcing
+   // question. AMSDOS is genuinely language-independent (only one variant
+   // exists in that same ROM folder) -- slot 7 below stays "amsdos.rom"
+   // regardless. 664 has none of these (never sold outside UK/DE).
+   // Danish and Spanish each have one BASIC gap in that source, on
+   // OPPOSITE models: 464 (SP) has no Spanish BASIC (only "Rom A"/OS), so
+   // Spanish is 6128-only; 6128 (DK) has no Danish BASIC (only "Rom A"/OS),
+   // so 6128 falls back to plain UK BASIC under Danish while 464 gets a
+   // real Danish BASIC ROM. Neither half-emulates a mismatched OS/BASIC
+   // pair -- same fail-safe posture as an unknown rom_language_ value
+   // elsewhere.
    const bool french = (rom_language_ == "fr");
    const bool spanish = (rom_language_ == "sp");
+   const bool danish = (rom_language_ == "dk");
 
    if (!strcmp(model, "664"))
    {
@@ -2467,8 +2474,8 @@ static void ApplyMachineType(const char* model)
    {
       hw = MachineSettings::OLD_464;
       default_crtc = CRTC::HD6845S;
-      lower_rom = french ? "os464_fr.rom" : "os464.rom";
-      upper_rom = french ? "basic464_fr.rom" : "basic464.rom";
+      lower_rom = danish ? "os464_dk.rom" : french ? "os464_fr.rom" : "os464.rom";
+      upper_rom = danish ? "basic464_dk.rom" : french ? "basic464_fr.rom" : "basic464.rom";
       ram = MachineSettings::M64_K;
    }
    else if (!strcmp(model, "gx4000"))
@@ -2510,8 +2517,11 @@ static void ApplyMachineType(const char* model)
    {
       hw = MachineSettings::OLD_6128;
       default_crtc = CRTC::UM6845R;
-      lower_rom = spanish ? "os6128_sp.rom" : french ? "os6128_fr.rom" : "os6128.rom";
-      upper_rom = spanish ? "basic6128_sp.rom" : french ? "basic6128_fr.rom" : "basic6128.rom";
+      lower_rom = danish ? "os6128_dk.rom" : spanish ? "os6128_sp.rom" : french ? "os6128_fr.rom" : "os6128.rom";
+      // No Danish 6128 BASIC exists in the source ROM -- real Danish OS,
+      // plain UK BASIC, same fail-safe fallback the option comment above
+      // documents.
+      upper_rom = danish ? "basic6128.rom" : spanish ? "basic6128_sp.rom" : french ? "basic6128_fr.rom" : "basic6128.rom";
       ram = MachineSettings::M128_K;
    }
 
