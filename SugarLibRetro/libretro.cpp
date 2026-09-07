@@ -842,6 +842,78 @@ private:
 };
 static RetroSound retro_sound_;
 
+// Amstrad printer port: CSig::Out() delivers the ASCII byte in the low 7
+// bits with the Centronics strobe pulse packed into bit 7; real firmware
+// waits for Busy() to clear before sending the next character.
+// CPCCoreEmu's own PrinterDefault implements exactly this handshake but is
+// dead code (`if (false) // TODO`, PrinterDefault.cpp:30). Rather than patch
+// the engine, CSig::printer_port_ is a public dependency-injection slot --
+// the same pattern already used for RetroDisplay/RetroSound/RetroFdcNotify
+// -- so this plugs in our own IPrinterPort instead of fixing theirs.
+class RetroPrinter : public IPrinterPort
+{
+public:
+   void SetEnabled(bool enabled) { enabled_ = enabled; }
+
+   virtual void Out(unsigned char c)
+   {
+      if (!enabled_ || busy_ || !(c & 0x80))
+         return;
+      if (file_ == nullptr)
+         Open();
+      if (file_ != nullptr)
+      {
+         const unsigned char ch = c & 0x7F;
+         fwrite(&ch, 1, 1, file_);
+         fflush(file_);
+      }
+      busy_ = true;
+   }
+
+   virtual bool Busy()
+   {
+      const bool was_busy = busy_;
+      busy_ = false;
+      return was_busy;
+   }
+
+   void Close()
+   {
+      if (file_ != nullptr)
+      {
+         fclose(file_);
+         file_ = nullptr;
+      }
+   }
+
+private:
+   void Open()
+   {
+      const char* dir = nullptr;
+      if (!environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || dir == nullptr || *dir == '\0')
+         dir = "/tmp";
+      // First free PRN####.TXT in the save directory -- same numbering
+      // scheme PrinterDefault::GetNewPrinterFile() used, just not tied to
+      // the engine's own (disabled) implementation.
+      char path[4096];
+      unsigned i = 0;
+      for (; i <= 9999; ++i)
+      {
+         snprintf(path, sizeof(path), "%s/sugarbox_PRN%04u.TXT", dir, i);
+         if (access(path, F_OK) != 0)
+            break;
+      }
+      file_ = fopen(path, "wb");
+      if (file_ != nullptr && log_cb != nullptr)
+         log_cb(RETRO_LOG_INFO, "Printer: capturing to '%s'.\n", path);
+   }
+
+   FILE* file_ = nullptr;
+   bool busy_ = false;
+   bool enabled_ = false;
+};
+static RetroPrinter retro_printer_;
+
 // FDC::LoadDisk() only reports success/failure through this notifier (see
 // EmulatorEngine::LoadDisk's switch on the return code, which -- in the
 // upstream Qt app -- feeds a message box; here it just logs so a failed
@@ -1145,6 +1217,10 @@ void retro_init(void)
    ApplyMachineType(var.value ? var.value : "6128");
 
    motherboard_ = emulator_->GetMotherboard();
+   // See RetroPrinter above: printer_port_ is a public DI slot, set once
+   // here since InitMotherbard() (which resets it to &default_printer_) only
+   // ever runs from this same Init() call, never on a model switch.
+   motherboard_->GetSig()->printer_port_ = &retro_printer_;
    // EmulatorEngine::InitSound() (not Motherboard::GetPSG()->InitSound(),
    // which only sets a barely-used secondary field on the PSG -- see the
    // RetroSound comment above) is what actually wires SoundMixer::Init(),
@@ -1255,6 +1331,10 @@ void retro_set_environment(retro_environment_t cb)
       // Second AY pair + Z80 CTC on ports 0xF880-0xF8FF. Off by default: it
       // changes which RunFullSpeed() instantiation the engine dispatches to.
       { "sugarbox_playcity", "PlayCity expansion; disabled|enabled" },
+      // Captures whatever the guest sends to the printer port as a plain
+      // text file in the save directory (sugarbox_PRN####.TXT). Off by
+      // default: it writes a file the user didn't ask for otherwise.
+      { "sugarbox_printer_capture", "Printer output capture; disabled|enabled" },
       { NULL, NULL },
    };
 
@@ -1726,6 +1806,11 @@ static void check_variables(void)
                          : DISK_PROTECT_AUTO;
       ApplyDiskWriteProtect();
    }
+
+   var.key = "sugarbox_printer_capture";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      retro_printer_.SetEnabled(strcmp(var.value, "enabled") == 0);
 
    var.key = "sugarbox_playcity";
    var.value = nullptr;
@@ -2387,6 +2472,7 @@ void retro_unload_game(void)
 {
    // Last chance to persist: without this anything a game saved is lost.
    MaybeWriteBackDisk(current_disk_index_);
+   retro_printer_.Close();
    last_aspect = 0.0f;
    last_sample_rate = 0.0f;
 }
