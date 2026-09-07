@@ -373,11 +373,22 @@ static const AutorunKey kAutorunKeys[] = {
 };
 
 // Filled by ArmAutorun(); "RUN\"<file>\r", "|CPM\r", "CAT\r" or "RUN\"\r".
-static char autorun_sequence_[64] = { 0 };
+// Sized for the test hook's BASIC one-liners, not just an AMSDOS filename.
+static char autorun_sequence_[256] = { 0 };
 enum AutorunState { AUTORUN_IDLE, AUTORUN_WAITING, AUTORUN_PRE_SHIFT, AUTORUN_PRESS, AUTORUN_POST_SHIFT, AUTORUN_RELEASE, AUTORUN_DONE };
 static AutorunState autorun_state_ = AUTORUN_IDLE;
 static int autorun_timer_ = 0;
 static unsigned autorun_char_index_ = 0;
+// Frames to wait before the first keystroke. 150 = ~3s at 50Hz, enough for
+// the firmware to reach its Ready prompt; the test hook can raise it when it
+// has to wait for a disc to finish booting first.
+static int autorun_wait_frames_ = 150;
+// Set once SUGARLIBRETRO_TYPE has armed the typist, so media autorun stays out.
+static bool test_hook_armed_ = false;
+// Frames each keystroke phase is held. 20 = ~400ms, far longer than the CPC's
+// keyboard scan needs, but the value the staggering was proven at. The test
+// hook can lower it: a 57-character BASIC line at 20 takes over a minute.
+static int autorun_phase_frames_ = 20;
 
 // ~3s at 50Hz before typing (mirrors CPCCoreEmu's own Paste() gate, which
 // waits for 2000ms of emulated time before considering the machine ready),
@@ -398,7 +409,7 @@ static void ArmAutorun(const char* command)
    }
    autorun_sequence_[i] = '\0';
    autorun_state_ = AUTORUN_WAITING;
-   autorun_timer_ = 150;
+   autorun_timer_ = autorun_wait_frames_;
    autorun_char_index_ = 0;
 }
 
@@ -412,7 +423,7 @@ static void TickAutorun(unsigned char matrix[10])
       if (--autorun_timer_ <= 0)
       {
          autorun_state_ = AUTORUN_PRE_SHIFT;
-         autorun_timer_ = 20;
+         autorun_timer_ = autorun_phase_frames_;
       }
       return;
    }
@@ -453,11 +464,11 @@ static void TickAutorun(unsigned char matrix[10])
       if (!key->shift)
       {
          autorun_state_ = AUTORUN_PRESS;
-         autorun_timer_ = 20;
+         autorun_timer_ = autorun_phase_frames_;
          break;
       }
       matrix[2] &= ~(1 << 5);
-      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_PRESS; autorun_timer_ = 20; }
+      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_PRESS; autorun_timer_ = autorun_phase_frames_; }
       break;
 
    case AUTORUN_PRESS:
@@ -466,13 +477,13 @@ static void TickAutorun(unsigned char matrix[10])
       if (--autorun_timer_ <= 0)
       {
          autorun_state_ = key->shift ? AUTORUN_POST_SHIFT : AUTORUN_RELEASE;
-         autorun_timer_ = 20;
+         autorun_timer_ = autorun_phase_frames_;
       }
       break;
 
    case AUTORUN_POST_SHIFT:
       matrix[2] &= ~(1 << 5); // key released, shift still held
-      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_RELEASE; autorun_timer_ = 20; }
+      if (--autorun_timer_ <= 0) { autorun_state_ = AUTORUN_RELEASE; autorun_timer_ = autorun_phase_frames_; }
       break;
 
    case AUTORUN_RELEASE:
@@ -480,7 +491,7 @@ static void TickAutorun(unsigned char matrix[10])
       {
          ++autorun_char_index_;
          autorun_state_ = AUTORUN_PRE_SHIFT;
-         autorun_timer_ = 20;
+         autorun_timer_ = autorun_phase_frames_;
       }
       break;
 
@@ -914,6 +925,11 @@ static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
 {
    if (!autorun_enabled_ || load_ok != 0)
       return;
+   // A disk's autorun is armed from the FDC's DEFERRED load, which completes
+   // inside retro_run -- i.e. after retro_load_game has already armed the
+   // test hook. Without this the media command would silently overwrite it.
+   if (test_hook_armed_)
+      return;
    if (drive_number > 0)
       return; // B: is a second disc, not the one we boot from
    if (drive_number < 0)
@@ -949,6 +965,70 @@ static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
    }
    if (log_cb != nullptr && autorun_sequence_[0] != '\0')
       log_cb(RETRO_LOG_INFO, "Autorun: typing \"%s\".\n", autorun_sequence_);
+}
+
+// Test hook. The autorun typist and the RAM export
+// (retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM), already wired to
+// RetroArch's READ_CORE_MEMORY) together make a closed loop that reports
+// machine state as a NUMBER, so a change can be verified without a human
+// reading pixels off a screenshot:
+//
+//   SUGARLIBRETRO_TYPE='X=HIMEM:POKE &8000,X-256*INT(X/256)\r' retroarch ...
+//   echo "READ_CORE_MEMORY 8000 1" | nc -u -w2 127.0.0.1 55355
+//
+// This existed as a throwaway local patch for each test; an env var makes it
+// permanent without adding a user-visible core option (nothing reads it
+// unless it is set). `\r` in the value is accepted as literal backslash-r so
+// the whole sequence survives a shell single-quoted string. Overrides the
+// media autorun, including the one a disc arms from its deferred load.
+//
+//   SUGARLIBRETRO_TYPE_DELAY  frames before the first keystroke (default 150
+//                             = ~3s; raise it to let a disc boot first)
+//   SUGARLIBRETRO_TYPE_RATE   frames each keystroke phase is held (default 20
+//                             = ~400ms; 6 is verified good and types a
+//                             57-character BASIC line in about 20s)
+//
+// Run it headless -- RetroArch's pause_nonactive defaults to true, so an
+// unfocused window freezes the emulator mid-sequence and every read comes
+// back as the value from before the typing. tools/cpc_probe.sh does this.
+//
+// Note screenshots are still the right tool for the things RAM cannot show:
+// palette/monitor rendering, border and overscan geometry, and firmware error
+// text that never lands at a fixed address.
+static void ArmTestHookIfRequested(void)
+{
+   const char* raw = getenv("SUGARLIBRETRO_TYPE");
+   if (raw == nullptr || *raw == '\0')
+      return;
+
+   const char* delay = getenv("SUGARLIBRETRO_TYPE_DELAY");
+   if (delay != nullptr && *delay != '\0')
+   {
+      const int frames = atoi(delay);
+      if (frames > 0)
+         autorun_wait_frames_ = frames;
+   }
+
+   const char* rate = getenv("SUGARLIBRETRO_TYPE_RATE");
+   if (rate != nullptr && *rate != '\0')
+   {
+      const int frames = atoi(rate);
+      if (frames > 0)
+         autorun_phase_frames_ = frames;
+   }
+
+   std::string typed;
+   for (const char* p = raw; *p != '\0'; ++p)
+   {
+      if (p[0] == '\\' && p[1] == 'r') { typed.push_back('\r'); ++p; }
+      else                             { typed.push_back(*p); }
+   }
+
+   ArmAutorun(typed.c_str());
+   test_hook_armed_ = true;
+   if (log_cb != nullptr)
+      log_cb(RETRO_LOG_INFO, "SUGARLIBRETRO_TYPE: typing \"%s\" after %d frame(s).\n",
+         autorun_sequence_, autorun_wait_frames_);
 }
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
@@ -2289,6 +2369,9 @@ bool retro_load_game(const struct retro_game_info *info)
          emulator_->LoadDisk(disk_images_[0].c_str(), 0);
       }
    }
+
+   // Last, so it wins over whatever autorun the media selected.
+   ArmTestHookIfRequested();
 
    return true;
 }
