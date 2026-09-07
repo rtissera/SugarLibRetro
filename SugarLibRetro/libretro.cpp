@@ -837,6 +837,7 @@ static RetroSound retro_sound_;
 // load isn't silently indistinguishable from a working one in the core log).
 static void HandleAutorunForLoadedItem(int load_ok, int drive_number);
 static void ApplyDiskWriteProtect();
+static void ApplyPlayCity();
 
 class RetroFdcNotify : public IFdcNotify
 {
@@ -898,6 +899,7 @@ static DiskWriteMode disk_write_mode_ = DISK_WRITE_SIDECAR;
 enum DiskProtectMode { DISK_PROTECT_AUTO = 0, DISK_PROTECT_ON, DISK_PROTECT_OFF };
 static DiskProtectMode disk_protect_mode_ = DISK_PROTECT_AUTO;
 static bool drive_b_enabled_ = false;
+static bool playcity_enabled_ = false;
 static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
@@ -1163,6 +1165,9 @@ void retro_set_environment(retro_environment_t cb)
       // the same convention the Amiga cores use for their extra drives.
       { "sugarbox_drive_b", "Second disk drive (B:) from playlist; disabled|enabled" },
       { "sugarbox_border", "Screen border; normal|full" },
+      // Second AY pair + Z80 CTC on ports 0xF880-0xF8FF. Off by default: it
+      // changes which RunFullSpeed() instantiation the engine dispatches to.
+      { "sugarbox_playcity", "PlayCity expansion; disabled|enabled" },
       { NULL, NULL },
    };
 
@@ -1572,6 +1577,9 @@ static void ApplyMachineType(const char* model)
       // harmless -- it just re-reads the same banks.
       if (!cart_path.empty())
          emulator_->LoadCpr(cart_path.c_str());
+      // ChangeSettings() ran UpdateExternalDevices(), which cleared the
+      // expansion list.
+      ApplyPlayCity();
    }
 }
 
@@ -1630,6 +1638,14 @@ static void check_variables(void)
                          : (strcmp(var.value, "off") == 0) ? DISK_PROTECT_OFF
                          : DISK_PROTECT_AUTO;
       ApplyDiskWriteProtect();
+   }
+
+   var.key = "sugarbox_playcity";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      playcity_enabled_ = (strcmp(var.value, "enabled") == 0);
+      ApplyPlayCity();
    }
 
    var.key = "sugarbox_border";
@@ -1913,6 +1929,28 @@ static std::vector<std::string> ParseM3u(const std::string& m3u_path)
 }
 
 static bool IsM3uFile(const char* path) { return HasExtension(path, "m3u"); }
+
+// PlayCity: a second AY pair plus a Z80 CTC on ports 0xF880-0xF8FF.
+// CPCCoreEmu implements the whole board (PlayCity.cpp, Z84C30.cpp for the
+// CTC, YMZ294.cpp for the sound chips, already mixed through SoundMixer) but
+// never plugs it in: the registration is commented out in Motherboard.cpp and
+// Machine.cpp because it called MachineSettings accessors that do not exist.
+//
+// CSig::PlugExpansionModule() is declared but has no implementation anywhere
+// in the engine, so this uses exp_list_/nb_expansion_ directly -- exactly what
+// the commented-out line in Motherboard.cpp does. The list is rebuilt from
+// scratch rather than appended to, because EmulatorEngine::UpdateExternalDevices()
+// resets nb_expansion_ to 0 on every ChangeSettings(), so this has to be
+// re-applied after each model change and must not accumulate duplicates.
+static void ApplyPlayCity()
+{
+   if (emulator_ == nullptr || emulator_->GetSig() == nullptr || motherboard_ == nullptr)
+      return;
+   CSig* sig = emulator_->GetSig();
+   sig->nb_expansion_ = 0;
+   if (playcity_enabled_)
+      sig->exp_list_[sig->nb_expansion_++] = motherboard_->GetPlayCity();
+}
 
 static bool DiskFileIsEdsk(const std::string& path)
 {
