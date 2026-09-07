@@ -916,7 +916,11 @@ static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
       return; // B: is a second disc, not the one we boot from
    if (drive_number < 0)
    {
-      ArmAutorun("RUN\"\r");
+      // Tape. |TAPE first: every model now carries AMSDOS in ROM slot 7, so a
+      // bare RUN" is routed to the disc, which answers "Bad command" when
+      // there is no disc in the drive. Loading a tape broke the moment AMSDOS
+      // was wired up, because before that RUN" fell through to the cassette.
+      ArmAutorun("|TAPE\rRUN\"\r");
    }
    else if (emulator_ != nullptr)
    {
