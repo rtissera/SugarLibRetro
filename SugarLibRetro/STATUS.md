@@ -106,20 +106,55 @@ Ranked by value:
    a recording deliberately.
 
 3. ~~**On-screen/virtual keyboard**~~ **DONE, both options (`b126952`,
-   `db5ef3a`)** — Romain's call was both, not either/or, with the grid laid
-   out by the real CPC hardware matrix (not alphabetical — nobody
-   touch-types on a d-pad, but QWERTY/AZERTY-from-the-emulated-machine is
-   still the correct identity for each key). START opens/closes; Y switches
-   between the two panels; in the grid, X is a sticky shift toggle
-   (matches VICE from the survey) that produces a real Shift+letter —
-   something the curated-command path's ArmAutorun/kAutorunKeys can't do,
-   since it hardcodes every letter unshifted. First feature in this core
-   needing real pixel verification, which caught a real environment gotcha
-   (RetroArch's window can render larger than the Xvfb screen and get
-   silently clipped by `xwd -root` — see the font comment in libretro.cpp)
-   before it could taint any screenshot-based result. Full writeup incl.
-   font glyphs, grid table derivation, and the state-machine design in
-   `project_sugarbox_osk_survey.md` and the two commit messages.
+   `db5ef3a`, `69dc17f`, `0288d47`)** — Romain's call was both, not
+   either/or. START opens/closes; Y switches between the two panels; in
+   the grid, X is a sticky shift toggle (matches VICE from the survey)
+   that produces a real Shift+letter — something the curated-command
+   path's ArmAutorun/kAutorunKeys can't do, since it hardcodes every
+   letter unshifted. First feature in this core needing real pixel
+   verification, which caught two real bugs:
+   - A throwaway "TEST" render caught a genuine environment gotcha before
+     it could taint any real result: RetroArch's window can render larger
+     than the Xvfb screen and get silently clipped by `xwd -root` (see the
+     font comment in libretro.cpp) — needs Xvfb ≥1600x1200.
+   - **The grid was originally one row per matrix scan line — electrical
+     wiring order, not what's printed on a real keyboard.** Romain caught
+     it. Line 2 alone holds `[` (sits next to P), `]` (sits next to L) and
+     Return (spans both), three different visual rows sharing one
+     electrical line. Rebuilt from a real CPC 6128 keyboard photo
+     (cpcwiki.eu, via web.archive.org) and cross-checked against MAME's
+     `amstrad.cpp` driver (came back byte-identical to the existing
+     matrix data — only the grid's row *grouping* was wrong, not the
+     underlying char/line/bit table). Now 5 real rows: Esc/digits,
+     QWERTY, ASDF, ZXCV, Ctrl/Copy/Space.
+   No panel on GX4000 (`0288d47`) — it's a console, no physical keyboard
+   exists to have an on-screen one of.
+   Full writeup incl. font glyphs, grid table derivation, the keyboard
+   photo, and the state-machine design in `project_sugarbox_osk_survey.md`
+   and the commit messages.
+
+3a. **French ROM support, `sugarbox_rom_language` (`535c98d`) — new, but
+    shipped with a real regression found and fixed the same round
+    (`d7b824e`).** Prerequisite for a real (non-cosmetic) AZERTY OSK: the
+    core only ever emulated a UK machine before this. Sourced from
+    SugarboxV2's own ROM folder (same author as CPCCoreEmu; its UK files
+    are md5-identical to the ones already bundled here, so the French pair
+    next to them carries the same provenance/redistribution basis already
+    established for UK). 464/6128 only — no French 664 ever existed.
+    **Confirmed empirically that French firmware does a real keyboard
+    remap, not a keycap relabel**: typed the identical matrix position
+    (8,5) under UK and French ROMs — UK echoes `a`, French echoes `q`.
+    This broke autorun immediately (`RUN"DISC"` typed via the UK-position
+    `kAutorunKeys` table landed on screen as `run2disc` → Syntax error) —
+    fixed by having `ArmAutorun` and the OSK refuse to type/open at all
+    when `sugarbox_rom_language != "uk"`, logging why, rather than type
+    wrong characters silently. **A real character-accurate French
+    typing table and an actually-correct AZERTY OSK grid are still open**
+    — this round only makes the emulated machine itself real; the
+    automation built on top of UK positions stays UK-only until that
+    table exists. Model-variant question resolved too: 464/664/6128/Plus
+    share the same UK keyboard shape (no OSK changes needed); GX4000 has
+    no keyboard at all (handled above).
 
 4. ~~**Combo-keys**~~ **DONE (`96d5319`)** — `sugarbox_combo_l/r/l2/r2`,
    each mapping one shoulder button to Enter/Space/Esc/Delete/Tab/Copy/
@@ -130,6 +165,22 @@ Ranked by value:
 5. **Lightgun hit-detection verification.** Not code — needs CPC
    lightgun-compatible test software, none found yet. Independent of both
    sides.
+
+6. **Real French keyboard typing (unblocked by `535c98d`, not built yet).**
+   `sugarbox_rom_language=fr` now emulates a real French machine, but
+   `kAutorunKeys` presses UK matrix positions only — `ArmAutorun` and both
+   OSK panels refuse to type/open under French ROM rather than produce
+   wrong characters (see `d7b824e`). Needs: a French-position character
+   table (same shape as `kAutorunKeys`, different `(line,bit,shift)` per
+   char — the OS ROM's ~200-byte scan-table region, offsets ~7937-8151,
+   is almost certainly where the remap actually lives, worth disassembling
+   if the correspondence isn't obvious empirically), a French-labeled OSK
+   grid built from it (same `OskGridCell` shape as the UK grid, different
+   photo/reference — CPCWiki's Keyboard_Versions page has real French
+   keyboard photos), and switching `ArmAutorun`/the OSK to the right table
+   based on `rom_language_`. Real empirical verification needed the same
+   way the UK grid was built and fixed — do not guess the French layout
+   from the UK one by symmetry alone.
 
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
