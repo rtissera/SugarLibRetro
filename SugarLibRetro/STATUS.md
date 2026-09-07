@@ -166,21 +166,20 @@ Ranked by value:
    lightgun-compatible test software, none found yet. Independent of both
    sides.
 
-6. **Real French keyboard typing (unblocked by `535c98d`, not built yet).**
-   `sugarbox_rom_language=fr` now emulates a real French machine, but
-   `kAutorunKeys` presses UK matrix positions only — `ArmAutorun` and both
-   OSK panels refuse to type/open under French ROM rather than produce
-   wrong characters (see `d7b824e`). Needs: a French-position character
-   table (same shape as `kAutorunKeys`, different `(line,bit,shift)` per
-   char — the OS ROM's ~200-byte scan-table region, offsets ~7937-8151,
-   is almost certainly where the remap actually lives, worth disassembling
-   if the correspondence isn't obvious empirically), a French-labeled OSK
-   grid built from it (same `OskGridCell` shape as the UK grid, different
-   photo/reference — CPCWiki's Keyboard_Versions page has real French
-   keyboard photos), and switching `ArmAutorun`/the OSK to the right table
-   based on `rom_language_`. Real empirical verification needed the same
-   way the UK grid was built and fixed — do not guess the French layout
-   from the UK one by symmetry alone.
+6. ~~**Real French keyboard typing**~~ **DONE (`50b62e1`)** —
+   `kAutorunKeysFR` + `kOskGridFR`, built from real measured data (typed
+   known UK positions under French firmware, read the actual echo back
+   across four probe rounds — see `project_sugarbox_osk_survey.md` for the
+   full transcript), not guessed by symmetry. Confirmed real classic
+   AZERTY shape: only A/Q, W/Z swap and M relocates to UK's `:` position;
+   digit row inverts UK's convention (unshifted → symbol/accented char,
+   Shift → the digit). `RUN"DISC"` now boots a real game under French ROM
+   (was `run2disc` → Syntax error before this table existed). Deliberate
+   gaps, not guessed: `|` (so `|TAPE`/`|CPM`/`|A`/`|B` specifically don't
+   work under French — `CAT`/`RUN"`/`NEW`/`LIST`/`CLS`/`MODE 0-2` do), a
+   few untested punctuation positions, and every accented letter
+   (é/è/à/ç/ù — not representable in `kOskFont`'s ASCII glyph set at all,
+   a separate follow-up if ever needed).
 
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
