@@ -58,6 +58,198 @@ static retro_environment_t environ_cb;
 static retro_input_poll_t input_poll_cb;
 static retro_input_state_t input_state_cb;
 
+// On-screen keyboard font/rendering (STATUS.md gap #3). No text rendering
+// exists anywhere else in this core -- everything else is rectangles --
+// so this is genuinely new. 5x7 monospace, hand-authored simple block
+// letterforms (not derived from any existing font asset -- avoids the
+// licensing question raised for every other borrowed idea in this project
+// entirely by not borrowing anything). GetOskGlyph() returns nullptr
+// (rendered blank) for anything not yet defined, so a missing glyph fails
+// visibly rather than silently drawing garbage. Covers A-Z, 0-9, and the
+// punctuation kAutorunKeys can type -- space and '\r' have no glyph here on
+// purpose (space is blank; Enter/Del cells are labelled "RET"/"DEL" using
+// letters, not a raw control-character glyph).
+//
+// Pipeline (buffer/coordinate math, both border modes, all three monitor
+// modes) was verified with a throwaway "TEST" render before this real font
+// was written -- see the OSK survey memory file for the one real gotcha
+// that cost time: RetroArch's window can render larger than the Xvfb
+// screen and get recentred with a negative offset, silently clipping any
+// screenshot taken with `xwd -root`. Give Xvfb a screen at least as big as
+// the emulated frame's window (1600x1200 comfortably covers it) before
+// trusting any OSK screenshot.
+struct OskGlyph { char c; unsigned char rows[7]; };
+static const OskGlyph kOskFont[] = {
+   { 'A', { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 } },
+   { 'B', { 0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E } },
+   { 'C', { 0x0F, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0F } },
+   { 'D', { 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E } },
+   { 'E', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F } },
+   { 'F', { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10 } },
+   { 'G', { 0x0F, 0x10, 0x10, 0x17, 0x11, 0x11, 0x0F } },
+   { 'H', { 0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 } },
+   { 'I', { 0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E } },
+   { 'J', { 0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C } },
+   { 'K', { 0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11 } },
+   { 'L', { 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F } },
+   { 'M', { 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11 } },
+   { 'N', { 0x11, 0x19, 0x15, 0x15, 0x13, 0x11, 0x11 } },
+   { 'O', { 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E } },
+   { 'P', { 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 } },
+   { 'Q', { 0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D } },
+   { 'R', { 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11 } },
+   { 'S', { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E } },
+   { 'T', { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 } },
+   { 'U', { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E } },
+   { 'V', { 0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04 } },
+   { 'W', { 0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11 } },
+   { 'X', { 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11 } },
+   { 'Y', { 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04 } },
+   { 'Z', { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F } },
+   { '0', { 0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E } },
+   { '1', { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E } },
+   { '2', { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F } },
+   { '3', { 0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E } },
+   { '4', { 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02 } },
+   { '5', { 0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E } },
+   { '6', { 0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E } },
+   { '7', { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 } },
+   { '8', { 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E } },
+   { '9', { 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C } },
+   { '.', { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C } },
+   { ',', { 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x08 } },
+   { ':', { 0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00 } },
+   { ';', { 0x00, 0x0C, 0x0C, 0x00, 0x04, 0x08, 0x00 } },
+   { '/', { 0x01, 0x02, 0x04, 0x04, 0x08, 0x10, 0x00 } },
+   { '-', { 0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00 } },
+   { '@', { 0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0F } },
+   { '[', { 0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E } },
+   { ']', { 0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E } },
+   { '\\',{ 0x10, 0x08, 0x04, 0x04, 0x02, 0x01, 0x00 } },
+   { '!', { 0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04 } },
+   { '"', { 0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00 } },
+   { '|', { 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 } },
+   { '*', { 0x00, 0x15, 0x0E, 0x1F, 0x0E, 0x15, 0x00 } },
+   { '+', { 0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00 } },
+   { '?', { 0x0E, 0x11, 0x02, 0x04, 0x04, 0x00, 0x04 } },
+   { '=', { 0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00 } },
+   { '<', { 0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02 } },
+   { '>', { 0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08 } },
+   { '(', { 0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02 } },
+   { ')', { 0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08 } },
+   { '_', { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F } },
+   { '\'',{ 0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00 } },
+   { '&', { 0x0C, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0D } },
+   { '%', { 0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03 } },
+   { '$', { 0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04 } },
+   { '#', { 0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A } },
+   { '^', { 0x04, 0x0A, 0x11, 0x00, 0x00, 0x00, 0x00 } },
+};
+
+static const unsigned char* GetOskGlyph(char c)
+{
+   for (size_t i = 0; i < sizeof(kOskFont) / sizeof(kOskFont[0]); ++i)
+      if (kOskFont[i].c == c)
+         return kOskFont[i].rows;
+   return nullptr;
+}
+
+// Draws into whatever buffer RetroDisplay::VSync is about to hand to
+// video_cb -- i.e. AFTER crop and AFTER the monochrome transform (see the
+// two call sites in VSync()) -- so the OSK never needs to know about
+// crop_w_/crop_h_ differences between sugarbox_border=normal/full, and
+// renders identically whether sugarbox_monitor is color/green/amber.
+// `stride` is in ints, matching how VSync already indexes both the raw
+// 1024-wide live buffer and the tightly-packed mono_buffer_.
+static void OskDrawGlyph(int* buf, int stride, int x, int y, int scale, unsigned int color, char c)
+{
+   const unsigned char* rows = GetOskGlyph(c);
+   if (rows == nullptr)
+      return;
+   for (int row = 0; row < 7; ++row)
+   {
+      for (int col = 0; col < 5; ++col)
+      {
+         if (((rows[row] >> (4 - col)) & 1) == 0)
+            continue;
+         for (int sy = 0; sy < scale; ++sy)
+            for (int sx = 0; sx < scale; ++sx)
+               buf[(y + row * scale + sy) * stride + (x + col * scale + sx)] = (int)color;
+      }
+   }
+}
+
+static void OskDrawText(int* buf, int stride, int x, int y, int scale, unsigned int color, const char* text)
+{
+   int cursor_x = x;
+   for (; *text != '\0'; ++text)
+   {
+      OskDrawGlyph(buf, stride, cursor_x, y, scale, color, *text);
+      cursor_x += (5 + 1) * scale;
+   }
+}
+
+static void OskDrawFilledRect(int* buf, int stride, int x, int y, int w, int h, unsigned int color)
+{
+   for (int row = 0; row < h; ++row)
+      for (int col = 0; col < w; ++col)
+         buf[(y + row) * stride + (x + col)] = (int)color;
+}
+
+// On-screen keyboard state and drawing -- see the font comment above.
+enum OskMode { OSK_MODE_COMMANDS = 0 };
+static bool osk_open_ = false;
+static OskMode osk_mode_ = OSK_MODE_COMMANDS;
+static int osk_command_index_ = 0;
+
+struct OskCommand { const char* label; const char* typed; };
+// A curated set, not an attempt at completeness -- autorun already covers
+// the main pad-only case (booting media). These are the real CPC/AMSDOS
+// commands most useful once something is already running: switching
+// media, checking a catalogue, basic housekeeping. See the OSK survey
+// memory file for why this exists alongside the free-text grid rather than
+// instead of it (Locomotive BASIC has no keyword-shortcut convention to
+// lean on the way a Spectrum would).
+static const OskCommand kOskCommands[] = {
+   { "CAT",    "CAT\r" },
+   { "RUN\"",  "RUN\"\r" },
+   { "|TAPE",  "|TAPE\r" },
+   { "|CPM",   "|CPM\r" },
+   { "|A",     "|A\r" },
+   { "|B",     "|B\r" },
+   { "NEW",    "NEW\r" },
+   { "LIST",   "LIST\r" },
+   { "CLS",    "CLS\r" },
+   { "MODE 0", "MODE 0\r" },
+   { "MODE 1", "MODE 1\r" },
+   { "MODE 2", "MODE 2\r" },
+};
+#define OSK_NUM_COMMANDS (int)(sizeof(kOskCommands) / sizeof(kOskCommands[0]))
+
+// Panel geometry in the SAME post-crop coordinate space OskDrawText uses.
+// Sized against the smaller "normal" border crop (640x480) so it never
+// overflows in the "full" border mode either.
+#define OSK_PANEL_X 40
+#define OSK_PANEL_Y 40
+#define OSK_PANEL_W 300
+#define OSK_ROW_H 26
+#define OSK_TEXT_SCALE 2
+
+static void DrawOskPanel(int* buf, int stride, int w, int h)
+{
+   if (!osk_open_)
+      return;
+   const int panel_h = OSK_NUM_COMMANDS * OSK_ROW_H + 12;
+   OskDrawFilledRect(buf, stride, OSK_PANEL_X, OSK_PANEL_Y, OSK_PANEL_W, panel_h, 0xE0101018u);
+   for (int i = 0; i < OSK_NUM_COMMANDS; ++i)
+   {
+      const int row_y = OSK_PANEL_Y + 6 + i * OSK_ROW_H;
+      if (i == osk_command_index_)
+         OskDrawFilledRect(buf, stride, OSK_PANEL_X + 4, row_y - 2, OSK_PANEL_W - 8, OSK_ROW_H - 2, 0xFF3050A0u);
+      OskDrawText(buf, stride, OSK_PANEL_X + 10, row_y, OSK_TEXT_SCALE, 0xFFE8E8E8u, kOskCommands[i].label);
+   }
+}
+
 // Display
 class RetroDisplay : public IDisplay
 {
@@ -100,9 +292,13 @@ public:
    virtual int GetHeight() { return crop_h_; };
    virtual void VSync(bool bDbg)
    {
-      const int* src = &video_buffer[crop_x_ + 1024 * crop_y_];
+      int* src = &video_buffer[crop_x_ + 1024 * crop_y_];
       if (monitor_type_ == MONITOR_COLOR)
       {
+         // OSK draws here, into the SAME live buffer the CRTC/gate-array
+         // just rendered into -- it gets fully overwritten by real picture
+         // data again next frame, same as any per-frame raster overlay.
+         DrawOskPanel(src, 1024, crop_w_, crop_h_);
          video_cb(src, crop_w_, crop_h_, pitch_);
          return;
       }
@@ -146,6 +342,7 @@ public:
             out[x] = (int)(0xFF000000u | (outr << 16) | (outg << 8) | outb);
          }
       }
+      DrawOskPanel(mono_buffer_, crop_w_, crop_w_, crop_h_);
       video_cb(mono_buffer_, crop_w_, crop_h_, crop_w_ * sizeof(unsigned int));
    }
    virtual void StartSync(){};
@@ -1471,6 +1668,63 @@ void retro_reset(void)
       emulator_->Reset();
 }
 
+// On-screen keyboard input (STATUS.md gap #3, Option A: curated commands).
+// START toggles the panel open/closed -- SELECT was considered and rejected:
+// Batocera/Knulli-derived frontends conventionally bind it as the
+// hotkey-enable modifier, so a bare SELECT press risks never reaching the
+// core at all. All edges are debounced (only the press transition acts),
+// otherwise a held button would race through the whole list/retrigger
+// every frame.
+static void TickOsk()
+{
+   static bool prev_start = false, prev_up = false, prev_down = false, prev_confirm = false, prev_cancel = false;
+
+   const bool start = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START);
+   if (start && !prev_start)
+      osk_open_ = !osk_open_;
+   prev_start = start;
+
+   if (!osk_open_)
+   {
+      prev_up = prev_down = prev_confirm = prev_cancel = false;
+      return;
+   }
+
+   const bool up = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP);
+   const bool down = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN);
+   const bool confirm = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A);
+   const bool cancel = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B);
+
+   if (up && !prev_up)
+      osk_command_index_ = (osk_command_index_ + OSK_NUM_COMMANDS - 1) % OSK_NUM_COMMANDS;
+   if (down && !prev_down)
+      osk_command_index_ = (osk_command_index_ + 1) % OSK_NUM_COMMANDS;
+
+   if (confirm && !prev_confirm)
+   {
+      // Busy-check: an OSK selection during the ~3s post-load autorun wait
+      // would otherwise silently eat the pending media autorun (ArmAutorun
+      // just overwrites autorun_sequence_/autorun_state_ unconditionally).
+      if (autorun_state_ == AUTORUN_IDLE || autorun_state_ == AUTORUN_DONE)
+      {
+         if (log_cb != nullptr)
+            log_cb(RETRO_LOG_INFO, "OSK: command %d selected, typing \"%s\".\n", osk_command_index_, kOskCommands[osk_command_index_].typed);
+         const int saved_wait = autorun_wait_frames_;
+         autorun_wait_frames_ = 2; // nothing to wait for -- the user is already looking at the panel
+         ArmAutorun(kOskCommands[osk_command_index_].typed);
+         autorun_wait_frames_ = saved_wait;
+      }
+      osk_open_ = false;
+   }
+   if (cancel && !prev_cancel)
+      osk_open_ = false;
+
+   prev_up = up;
+   prev_down = down;
+   prev_confirm = confirm;
+   prev_cancel = cancel;
+}
+
 static void update_input(void)
 {
    int dir_x = 0;
@@ -1590,24 +1844,34 @@ static void update_input(void)
    unsigned char matrix[10];
    memset(matrix, 0xFF, sizeof(matrix));
 
-   // Joystick 0, row 9: up/down/left/right/fire1/fire2.
-   if (joy_up)    matrix[9] &= ~0x01;
-   if (joy_down)  matrix[9] &= ~0x02;
-   if (joy_left)  matrix[9] &= ~0x04;
-   if (joy_right) matrix[9] &= ~0x08;
-   if (button_X)  matrix[9] &= ~0x10;
-   if (button_A)  matrix[9] &= ~0x20;
+   // On-screen keyboard: see TickOsk. Must run before the joystick/combo
+   // writes below so osk_open_ is current for the gates that follow --
+   // while the panel is open, the d-pad drives its own selection instead
+   // of the CPC joystick, and a shoulder press must not also inject a
+   // combo-key behind the panel's back.
+   TickOsk();
 
-   // Combo-keys: see kComboKeys/LookupComboKey. -1 line means "none" (the
-   // button reads normally, nothing extra happens).
-   if (combo_l_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L))
-      matrix[combo_l_line_] &= ~(1 << combo_l_bit_);
-   if (combo_r_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R))
-      matrix[combo_r_line_] &= ~(1 << combo_r_bit_);
-   if (combo_l2_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2))
-      matrix[combo_l2_line_] &= ~(1 << combo_l2_bit_);
-   if (combo_r2_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2))
-      matrix[combo_r2_line_] &= ~(1 << combo_r2_bit_);
+   // Joystick 0, row 9: up/down/left/right/fire1/fire2.
+   if (!osk_open_)
+   {
+      if (joy_up)    matrix[9] &= ~0x01;
+      if (joy_down)  matrix[9] &= ~0x02;
+      if (joy_left)  matrix[9] &= ~0x04;
+      if (joy_right) matrix[9] &= ~0x08;
+      if (button_X)  matrix[9] &= ~0x10;
+      if (button_A)  matrix[9] &= ~0x20;
+
+      // Combo-keys: see kComboKeys/LookupComboKey. -1 line means "none"
+      // (the button reads normally, nothing extra happens).
+      if (combo_l_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L))
+         matrix[combo_l_line_] &= ~(1 << combo_l_bit_);
+      if (combo_r_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R))
+         matrix[combo_r_line_] &= ~(1 << combo_r_bit_);
+      if (combo_l2_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2))
+         matrix[combo_l2_line_] &= ~(1 << combo_l2_bit_);
+      if (combo_r2_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2))
+         matrix[combo_r2_line_] &= ~(1 << combo_r2_bit_);
+   }
 
    for (size_t i = 0; i < active_keymap_size_; ++i)
    {
