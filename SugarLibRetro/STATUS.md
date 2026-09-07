@@ -105,10 +105,22 @@ Ranked by value:
    until the engine has a safe record-onto-blank-tape path and a way to end
    a recording deliberately.
 
-3. **On-screen/virtual keyboard.** Pad-only handheld targets need d-pad
-   navigation (pointer-driven overlays are dead on arrival here), no
-   font/glyph system exists in this core today (rectangles only) — real
-   work either way, but 100% in libretro.cpp.
+3. **On-screen/virtual keyboard — DESIGN UNDECIDED, surveyed 2026-09-08,
+   not yet implemented.** cap32's is pointer-only (no d-pad path at all,
+   not a template). VICE's is the closest fit: discrete grid, d-pad +
+   wraparound, sticky-shift toggle, plain text via an existing bitmap font.
+   No libretro API shortcut exists for this — every core rolls its own.
+   Two real options on the table, Romain's call which: (1) a curated
+   scrollable command list (~15-20 pre-baked strings through the existing
+   autorun-typist injection path) — zero font rendering needed, doesn't
+   cover free-text filenames; or (2) a full VICE-style grid, alphabetical
+   not QWERTY (nobody touch-types on a d-pad), with a small hand-authored
+   bitmap font (not DOSBox's GPL glyph tables). Full writeup: see memory
+   file `project_sugarbox_osk_survey.md`.
+   Pad-only handheld targets need d-pad navigation either way
+   (pointer-driven overlays are dead on arrival here); no font/glyph system
+   exists in this core today (rectangles only) — real work either way, but
+   100% in libretro.cpp.
    Reference (read-only, `libretro/` subtree — do not copy): cap32's
    `retro_keyboard.c` + microui overlay, for layout/UX ideas only.
 
