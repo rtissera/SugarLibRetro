@@ -335,11 +335,41 @@ static const OskGridCell kOskGridFR[OSK_GRID_ROWS][OSK_GRID_COLS] = {
    // regardless of ROM language.
    { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
 };
+
+// Spanish equivalent, same (line,bit) per cell as kOskGrid. Confirmed
+// dramatically simpler than French: only one cell actually changes. The
+// ':'/'*' cell becomes the dedicated Spanish Ñ/ñ key -- represented with
+// the "ENYE" special label (reusing existing E/N/Y glyphs) since kOskFont
+// has no ñ/Ñ glyph to draw a real character there. Two other positions
+// (UK's '^' and '+') gave unclear/exotic echoes across two probes and are
+// left at their UK values rather than guessed -- see kAutorunKeysSP's
+// comment for the same finding on the typing side.
+static const OskGridCell kOskGridSP[OSK_GRID_ROWS][OSK_GRID_COLS] = {
+   { {8,2,0,0,"ESC"}, {8,0,'1','!',nullptr}, {8,1,'2','"',nullptr}, {7,1,'3','#',nullptr},
+     {7,0,'4','$',nullptr}, {6,1,'5','%',nullptr}, {6,0,'6','&',nullptr}, {5,1,'7','\'',nullptr},
+     {5,0,'8','(',nullptr}, {4,1,'9',')',nullptr}, {4,0,'0','_',nullptr}, {3,1,'-','=',nullptr},
+     {3,0,0,'^',nullptr}, {2,0,0,0,"CLR"}, {9,7,0,0,"DEL"} },
+   { {8,4,0,0,"TAB"}, {8,3,'q','Q',nullptr}, {7,3,'w','W',nullptr}, {7,2,'e','E',nullptr},
+     {6,2,'r','R',nullptr}, {6,3,'t','T',nullptr}, {5,3,'y','Y',nullptr}, {5,2,'u','U',nullptr},
+     {4,3,'i','I',nullptr}, {4,2,'o','O',nullptr}, {3,3,'p','P',nullptr}, {3,2,'@','|',nullptr},
+     {2,1,'[',0,nullptr}, {2,2,0,0,"RET"}, E },
+   // The one real, confirmed Spanish-specific cell: Ñ/ñ.
+   { {8,6,0,0,"CAPS"}, {8,5,'a','A',nullptr}, {7,4,'s','S',nullptr}, {7,5,'d','D',nullptr},
+     {6,5,'f','F',nullptr}, {6,4,'g','G',nullptr}, {5,4,'h','H',nullptr}, {5,5,'j','J',nullptr},
+     {4,5,'k','K',nullptr}, {4,4,'l','L',nullptr}, {3,5,0,0,"ENYE"}, {3,4,';','+',nullptr},
+     {2,3,']',0,nullptr}, E, E },
+   { {8,7,'z','Z',nullptr}, {7,7,'x','X',nullptr}, {7,6,'c','C',nullptr}, {6,7,'v','V',nullptr},
+     {6,6,'b','B',nullptr}, {5,6,'n','N',nullptr}, {4,6,'m','M',nullptr}, {4,7,',','<',nullptr},
+     {3,7,'.','>',nullptr}, {3,6,'/','?',nullptr}, {2,6,'\\',0,nullptr}, E, E, E, E },
+   { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
+};
 #undef E
 
 static const OskGridCell (*ActiveOskGrid())[OSK_GRID_COLS]
 {
-   return (rom_language_ == "fr") ? kOskGridFR : kOskGrid;
+   if (rom_language_ == "fr") return kOskGridFR;
+   if (rom_language_ == "sp") return kOskGridSP;
+   return kOskGrid;
 }
 
 static bool OskGridCellEmpty(int row, int col)
@@ -841,6 +871,50 @@ static const AutorunKey kAutorunKeysFR[] = {
    { '#', 2, 3, false }, { '$', 2, 6, false }, { '[', 3, 1, true },
 };
 
+// Spanish equivalent. Confirmed empirically the same way as kAutorunKeysFR
+// (SUGARLIBRETRO_FORCE_TYPE probes, real echo read back) -- and the
+// finding is dramatically simpler than French: the FULL alphabet, every
+// digit, and nearly every punctuation position echo IDENTICALLY to UK.
+// Matches the much smaller UK/Spanish OS ROM diff (32 bytes vs French's
+// 115) -- Spanish keyboards are QWERTY-based with one added key, not a
+// full AZERTY-style letter reshuffle.
+//
+// The one real, confirmed, expected difference: UK's ':' / '*' position
+// (line 3, bit 5) becomes the dedicated Spanish Ñ/ñ key -- exactly the
+// real-world distinguishing feature of a Spanish keyboard. Since kOskFont
+// has no ñ/Ñ glyph and kAutorunKeys' character set is plain ASCII, ':'
+// and '*' simply have no source position under Spanish and are omitted
+// here (TickAutorun already skips unknown characters rather than typing
+// garbage). Two more positions (UK's shift-only '^', and '+') gave
+// unclear/exotic echoes across two separate probes -- not guessed,
+// omitted the same way rather than risk shipping a wrong character.
+// Everything else below is identical to kAutorunKeys by position.
+static const AutorunKey kAutorunKeysSP[] = {
+   { 'A', 8, 5, false }, { 'B', 6, 6, false }, { 'C', 7, 6, false },
+   { 'D', 7, 5, false }, { 'E', 7, 2, false }, { 'F', 6, 5, false },
+   { 'G', 6, 4, false }, { 'H', 5, 4, false }, { 'I', 4, 3, false },
+   { 'J', 5, 5, false }, { 'K', 4, 5, false }, { 'L', 4, 4, false },
+   { 'M', 4, 6, false }, { 'N', 5, 6, false }, { 'O', 4, 2, false },
+   { 'P', 3, 3, false }, { 'Q', 8, 3, false }, { 'R', 6, 2, false },
+   { 'S', 7, 4, false }, { 'T', 6, 3, false }, { 'U', 5, 2, false },
+   { 'V', 6, 7, false }, { 'W', 7, 3, false }, { 'X', 7, 7, false },
+   { 'Y', 5, 3, false }, { 'Z', 8, 7, false },
+   { '0', 4, 0, false }, { '1', 8, 0, false }, { '2', 8, 1, false },
+   { '3', 7, 1, false }, { '4', 7, 0, false }, { '5', 6, 1, false },
+   { '6', 6, 0, false }, { '7', 5, 1, false }, { '8', 5, 0, false },
+   { '9', 4, 1, false },
+   { ' ',  5, 7, false }, { '\r', 2, 2, false },
+   { '.',  3, 7, false }, { ',',  4, 7, false },
+   { ';',  3, 4, false }, { '/',  3, 6, false }, { '-',  3, 1, false },
+   { '@',  3, 2, false }, { '[',  2, 1, false }, { ']',  2, 3, false },
+   { '\\', 2, 6, false },
+   { '"', 8, 1, true }, { '|', 3, 2, true }, { '!', 8, 0, true },
+   { '=', 3, 1, true }, { '<', 4, 7, true }, { '>', 3, 7, true },
+   { '(', 5, 0, true }, { ')', 4, 1, true }, { '_', 4, 0, true },
+   { '\'', 5, 1, true }, { '&', 6, 0, true }, { '%', 6, 1, true },
+   { '$', 7, 0, true }, { '#', 7, 1, true },
+};
+
 // Filled by ArmAutorun(); "RUN\"<file>\r", "|CPM\r", "CAT\r" or "RUN\"\r".
 // Sized for the test hook's BASIC one-liners, not just an AMSDOS filename.
 static char autorun_sequence_[256] = { 0 };
@@ -879,7 +953,7 @@ static void ArmAutorun(const char* command)
    // under a non-UK ROM and reading the real echoed character back
    // (screenshot or printer capture) is how a per-language table gets
    // built, not guessed.
-   if (rom_language_ != "uk" && rom_language_ != "fr" && getenv("SUGARLIBRETRO_FORCE_TYPE") == nullptr)
+   if (rom_language_ != "uk" && rom_language_ != "fr" && rom_language_ != "sp" && getenv("SUGARLIBRETRO_FORCE_TYPE") == nullptr)
    {
       if (log_cb != nullptr)
          log_cb(RETRO_LOG_WARN, "Autorun/typed-command skipped: sugarbox_rom_language=%s has no character table -- typing would produce wrong characters.\n", rom_language_.c_str());
@@ -926,6 +1000,11 @@ static void TickAutorun(unsigned char matrix[10])
    {
       for (size_t i = 0; i < sizeof(kAutorunKeysFR) / sizeof(kAutorunKeysFR[0]); ++i)
          if (kAutorunKeysFR[i].c == c) { key = &kAutorunKeysFR[i]; break; }
+   }
+   else if (rom_language_ == "sp")
+   {
+      for (size_t i = 0; i < sizeof(kAutorunKeysSP) / sizeof(kAutorunKeysSP[0]); ++i)
+         if (kAutorunKeysSP[i].c == c) { key = &kAutorunKeysSP[i]; break; }
    }
    else
    {
@@ -2037,7 +2116,7 @@ static void TickOsk()
    // wrong thing -- worse than not offering the panel at all. uk and fr
    // both have one now; ActiveOskGrid()/TickOsk's confirm handler below
    // already pick the right table via rom_language_.
-   if (last_applied_model_ == "gx4000" || (rom_language_ != "uk" && rom_language_ != "fr"))
+   if (last_applied_model_ == "gx4000" || (rom_language_ != "uk" && rom_language_ != "fr" && rom_language_ != "sp"))
    {
       osk_open_ = false;
       prev_start = prev_up = prev_down = prev_left = prev_right = false;
