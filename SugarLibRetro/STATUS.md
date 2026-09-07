@@ -45,6 +45,7 @@ clean-room in our own MIT code. Never copy source.**
 | .info metadata, input descriptors, PAL region fix | — |
 | Format-parser regression corpus | `tools/test_corpus.sh` — real DSK/EDSK/HFE/HFEv3/SCP/IPF/CTR/CDT samples, checked headlessly |
 | Printer-to-file capture | `sugarbox_printer_capture` (default off) — via the public `CSig::printer_port_` DI slot, no engine patch |
+| Combo-keys | `sugarbox_combo_l/r/l2/r2` — shoulder buttons reach Enter/Space/Esc/Delete/Tab/Copy/Control/Capslock on a gamepad-only session |
 
 ## WIP / partial
 
@@ -111,10 +112,11 @@ Ranked by value:
    Reference (read-only, `libretro/` subtree — do not copy): cap32's
    `retro_keyboard.c` + microui overlay, for layout/UX ideas only.
 
-4. **Combo-keys** (joypad button → CPC key combo). Same mechanism already
-   proven for autorun (`ForceKeyboardState`) — a core option table plus
-   OR-ing extra matrix bits. libretro.cpp only.
-   Reference (read-only): cap32's `combokey`/`db_mapkeys`.
+4. ~~**Combo-keys**~~ **DONE (`96d5319`)** — `sugarbox_combo_l/r/l2/r2`,
+   each mapping one shoulder button to Enter/Space/Esc/Delete/Tab/Copy/
+   Control/Capslock/none. Verified end-to-end headless: an unsubmitted
+   BASIC line (typed with no trailing Enter) only executed once the bound
+   button was actually pressed via RetroArch's own input path.
 
 5. **Lightgun hit-detection verification.** Not code — needs CPC
    lightgun-compatible test software, none found yet. Independent of both
