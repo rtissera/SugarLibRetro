@@ -363,12 +363,46 @@ static const OskGridCell kOskGridSP[OSK_GRID_ROWS][OSK_GRID_COLS] = {
      {3,7,'.','>',nullptr}, {3,6,'/','?',nullptr}, {2,6,'\\',0,nullptr}, E, E, E, E },
    { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
 };
+
+// Danish equivalent, same (line,bit) per cell as kOskGrid. Confirmed via
+// the same probe method as kAutorunKeysDK (see its comment for the full
+// finding). Four cells hit kOskFont's ASCII-only wall: UK's ':'/'*' key
+// now produces ae/AE (labelled "AE", mnemonic text like Spanish's "ENYE" --
+// not a real ligature glyph), UK's ';'/'+' key now produces oe/OE
+// (labelled "OE"), UK's shift-only '^' cell now produces a GBP sign
+// (labelled "GBP"), and UK's '@'/'|' key produces an accented-a unshifted
+// and a ring-A shifted -- two DIFFERENT non-ASCII characters on one cell,
+// worse than the other three (which are each just one non-ASCII character,
+// or an upper/lowercase pair a single text label can honestly stand in
+// for), so left fully empty rather than pick one and hide the other.
+// Everything that got DISPLACED by the three labelled extra characters
+// lands on plain ASCII and is representable as normal: '[' now types '@',
+// ']' now types ':', '\\' now types ';', all confirmed directly.
+static const OskGridCell kOskGridDK[OSK_GRID_ROWS][OSK_GRID_COLS] = {
+   { {8,2,0,0,"ESC"}, {8,0,'1','!',nullptr}, {8,1,'2','"',nullptr}, {7,1,'3','#',nullptr},
+     {7,0,'4','$',nullptr}, {6,1,'5','%',nullptr}, {6,0,'6','&',nullptr}, {5,1,'7','\'',nullptr},
+     {5,0,'8','(',nullptr}, {4,1,'9',')',nullptr}, {4,0,'0','_',nullptr}, {3,1,'-','=',nullptr},
+     {3,0,0,0,"GBP"}, {2,0,0,0,"CLR"}, {9,7,0,0,"DEL"} },
+   { {8,4,0,0,"TAB"}, {8,3,'q','Q',nullptr}, {7,3,'w','W',nullptr}, {7,2,'e','E',nullptr},
+     {6,2,'r','R',nullptr}, {6,3,'t','T',nullptr}, {5,3,'y','Y',nullptr}, {5,2,'u','U',nullptr},
+     {4,3,'i','I',nullptr}, {4,2,'o','O',nullptr}, {3,3,'p','P',nullptr}, E,
+     {2,1,'@',0,nullptr}, {2,2,0,0,"RET"}, E },
+   { {8,6,0,0,"CAPS"}, {8,5,'a','A',nullptr}, {7,4,'s','S',nullptr}, {7,5,'d','D',nullptr},
+     {6,5,'f','F',nullptr}, {6,4,'g','G',nullptr}, {5,4,'h','H',nullptr}, {5,5,'j','J',nullptr},
+     {4,5,'k','K',nullptr}, {4,4,'l','L',nullptr}, {3,5,0,0,"AE"}, {3,4,0,0,"OE"},
+     {2,3,':',0,nullptr}, E, E },
+   { {8,7,'z','Z',nullptr}, {7,7,'x','X',nullptr}, {7,6,'c','C',nullptr}, {6,7,'v','V',nullptr},
+     {6,6,'b','B',nullptr}, {5,6,'n','N',nullptr}, {4,6,'m','M',nullptr}, {4,7,',','(',nullptr},
+     {3,7,'.',')',nullptr}, {3,6,'/','?',nullptr}, {2,6,';',0,nullptr}, E, E, E, E },
+   { {2,7,0,0,"CTRL"}, {1,1,0,0,"COPY"}, {5,7,0,0,"SPC"}, E, E, E, E, E, E, E, E, E, E, E, E },
+};
 #undef E
 
 static const OskGridCell (*ActiveOskGrid())[OSK_GRID_COLS]
 {
    if (rom_language_ == "fr") return kOskGridFR;
    if (rom_language_ == "sp") return kOskGridSP;
+   if (rom_language_ == "dk") return kOskGridDK;
    return kOskGrid;
 }
 
@@ -915,6 +949,50 @@ static const AutorunKey kAutorunKeysSP[] = {
    { '$', 7, 0, true }, { '#', 7, 1, true },
 };
 
+// Danish equivalent. Confirmed empirically the same way as kAutorunKeysFR/SP
+// (SUGARLIBRETRO_FORCE_TYPE probes, real echo read back). Alphabet and
+// digits echo IDENTICALLY to UK -- Danish CPC keyboards are QWERTY-based,
+// no letter reshuffle at all, closer to Spanish than French. The real
+// differences are confined to a cluster of punctuation positions that got
+// reassigned to make room for the extra Nordic characters (ae/AE at UK's
+// ':'/'*', oe/OE at UK's ';'/'+', a GBP sign at UK's shift-'^', and an
+// accented-a/ring-A pair at UK's '@'/'|' -- none of the five representable
+// in kOskFont's ASCII glyph set, see kOskGridDK's own comment) and a
+// knock-on reshuffle of the plain ASCII punctuation those extra characters
+// displaced. Three UK positions ('[', ']', '\\') no longer produce those
+// characters under Danish and nothing else tested does either -- omitted
+// here rather than guessed, same policy as French/Spanish's own gaps.
+// Six shifted positions ('|', '*', '+', '^', '<', '>') likewise lost their
+// UK meaning with no position found that still produces the plain ASCII
+// symbol.
+static const AutorunKey kAutorunKeysDK[] = {
+   { 'A', 8, 5, false }, { 'B', 6, 6, false }, { 'C', 7, 6, false },
+   { 'D', 7, 5, false }, { 'E', 7, 2, false }, { 'F', 6, 5, false },
+   { 'G', 6, 4, false }, { 'H', 5, 4, false }, { 'I', 4, 3, false },
+   { 'J', 5, 5, false }, { 'K', 4, 5, false }, { 'L', 4, 4, false },
+   { 'M', 4, 6, false }, { 'N', 5, 6, false }, { 'O', 4, 2, false },
+   { 'P', 3, 3, false }, { 'Q', 8, 3, false }, { 'R', 6, 2, false },
+   { 'S', 7, 4, false }, { 'T', 6, 3, false }, { 'U', 5, 2, false },
+   { 'V', 6, 7, false }, { 'W', 7, 3, false }, { 'X', 7, 7, false },
+   { 'Y', 5, 3, false }, { 'Z', 8, 7, false },
+   { '0', 4, 0, false }, { '1', 8, 0, false }, { '2', 8, 1, false },
+   { '3', 7, 1, false }, { '4', 7, 0, false }, { '5', 6, 1, false },
+   { '6', 6, 0, false }, { '7', 5, 1, false }, { '8', 5, 0, false },
+   { '9', 4, 1, false },
+   { ' ',  5, 7, false }, { '\r', 2, 2, false },
+   { '.',  3, 7, false }, { ',',  4, 7, false },
+   { '/',  3, 6, false }, { '-',  3, 1, false },
+   // UK's own ':'/';'/'@' positions now produce ae/oe/a-with-accent (see
+   // kOskGridDK); to still TYPE plain ':' ';' '@' under Danish, press the
+   // UK positions that were displaced to make room for them instead.
+   { ':',  2, 3, false }, { ';',  2, 6, false }, { '@',  2, 1, false },
+   { '"', 8, 1, true }, { '!', 8, 0, true },
+   { '?', 3, 6, true },
+   { '=', 3, 1, true }, { '(', 5, 0, true }, { ')', 4, 1, true },
+   { '_', 4, 0, true }, { '\'', 5, 1, true }, { '&', 6, 0, true },
+   { '%', 6, 1, true }, { '$', 7, 0, true }, { '#', 7, 1, true },
+};
+
 // Filled by ArmAutorun(); "RUN\"<file>\r", "|CPM\r", "CAT\r" or "RUN\"\r".
 // Sized for the test hook's BASIC one-liners, not just an AMSDOS filename.
 static char autorun_sequence_[256] = { 0 };
@@ -953,7 +1031,7 @@ static void ArmAutorun(const char* command)
    // under a non-UK ROM and reading the real echoed character back
    // (screenshot or printer capture) is how a per-language table gets
    // built, not guessed.
-   if (rom_language_ != "uk" && rom_language_ != "fr" && rom_language_ != "sp" && getenv("SUGARLIBRETRO_FORCE_TYPE") == nullptr)
+   if (rom_language_ != "uk" && rom_language_ != "fr" && rom_language_ != "sp" && rom_language_ != "dk" && getenv("SUGARLIBRETRO_FORCE_TYPE") == nullptr)
    {
       if (log_cb != nullptr)
          log_cb(RETRO_LOG_WARN, "Autorun/typed-command skipped: sugarbox_rom_language=%s has no character table -- typing would produce wrong characters.\n", rom_language_.c_str());
@@ -1005,6 +1083,11 @@ static void TickAutorun(unsigned char matrix[10])
    {
       for (size_t i = 0; i < sizeof(kAutorunKeysSP) / sizeof(kAutorunKeysSP[0]); ++i)
          if (kAutorunKeysSP[i].c == c) { key = &kAutorunKeysSP[i]; break; }
+   }
+   else if (rom_language_ == "dk")
+   {
+      for (size_t i = 0; i < sizeof(kAutorunKeysDK) / sizeof(kAutorunKeysDK[0]); ++i)
+         if (kAutorunKeysDK[i].c == c) { key = &kAutorunKeysDK[i]; break; }
    }
    else
    {
@@ -1894,11 +1977,10 @@ void retro_set_environment(retro_environment_t cb)
       // was ever sold). Spanish: 6128 only (no Spanish 464 BASIC ROM in
       // this project's source). Danish: 464 has a real Danish OS+BASIC
       // pair, 6128 has Danish OS but falls back to plain UK BASIC (no
-      // Danish 6128 BASIC in this project's source). uk/fr/sp have real
-      // typing tables (kAutorunKeys*) and OSK grids (kOskGrid*); dk boots
-      // a real machine but has no table yet -- ArmAutorun/the OSK fail
-      // safe (skip, log why) on it and on any other value rather than
-      // type wrong characters. AMSDOS is language-independent,
+      // Danish 6128 BASIC in this project's source). uk/fr/sp/dk all have
+      // real typing tables (kAutorunKeys*) and OSK grids (kOskGrid*);
+      // ArmAutorun/the OSK fail safe (skip, log why) on any OTHER value
+      // rather than type wrong characters. AMSDOS is language-independent,
       // always the same file either way. See ApplyMachineType for
       // provenance.
       { "sugarbox_rom_language", "Emulated ROM language; uk|fr|sp|dk" },
@@ -2118,7 +2200,7 @@ static void TickOsk()
    // wrong thing -- worse than not offering the panel at all. uk and fr
    // both have one now; ActiveOskGrid()/TickOsk's confirm handler below
    // already pick the right table via rom_language_.
-   if (last_applied_model_ == "gx4000" || (rom_language_ != "uk" && rom_language_ != "fr" && rom_language_ != "sp"))
+   if (last_applied_model_ == "gx4000" || (rom_language_ != "uk" && rom_language_ != "fr" && rom_language_ != "sp" && rom_language_ != "dk"))
    {
       osk_open_ = false;
       prev_start = prev_up = prev_down = prev_left = prev_right = false;

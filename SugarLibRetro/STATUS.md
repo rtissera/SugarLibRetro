@@ -199,6 +199,30 @@ Ranked by value:
    confirms ENYE lands right after L, exactly where a real Spanish
    keyboard has it.
 
+8. ~~**Danish ROM support + real keyboard typing**~~ **DONE (`935a9a6`,
+   next commit)** — `sugarbox_rom_language=dk`, same source/provenance as
+   French/Spanish. 464 has a real Danish OS+BASIC pair; 6128 has a real
+   Danish OS but falls back to plain UK BASIC (no Danish 6128 BASIC ROM in
+   this project's source) -- confirmed not a bug by tracing the boot
+   banner's region-code letter to the BASIC ROM, not the OS ROM (6128-DK
+   correctly shows UK's own `(v3)`, while 464-DK shows a real, distinct
+   `(d1)`). `kAutorunKeysDK`/`kOskGridDK` built the same empirical way as
+   French/Spanish: full alphabet and every digit echo identically to UK
+   (QWERTY-based, no letter reshuffle, closer to Spanish than French). The
+   real differences are a punctuation cluster reassigned to make room for
+   the extra Nordic characters: UK's `:`/`*` position now produces ae/AE,
+   `;`/`+` now produces oe/OE, shift-`^` now produces a GBP sign, and
+   `@`/`|` now produces an accented-a/ring-A pair -- none representable in
+   `kOskFont`'s ASCII glyph set, shown on the grid as "AE"/"OE"/"GBP" text
+   labels (same idiom as Spanish's "ENYE") or left empty where the cell
+   would need two different non-ASCII characters on one shift toggle.
+   Everything the extra characters displaced still types plain ASCII from
+   a different position (`[`→`@`, `]`→`:`, `\`→`;`), all confirmed
+   directly and wired into `kAutorunKeysDK` so plain `:`/`;`/`@` still work
+   in filenames/RSX commands. `RUN"DISC"` boots a real game under Danish
+   ROM (6128, Danish OS + UK BASIC); grid screenshot confirms the labels
+   land exactly where measured.
+
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
 1. **Tape record/save.** Real crash in `CTape::Tick()` (unsigned underflow
