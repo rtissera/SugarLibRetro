@@ -57,6 +57,14 @@ static retro_audio_sample_batch_t audio_batch_cb;
 static retro_environment_t environ_cb;
 static retro_input_poll_t input_poll_cb;
 static retro_input_state_t input_state_cb;
+// Declared this early (rather than near its actual retro_set_environment
+// setup) so it's visible to ArmAutorun below, which needs to log before
+// most of the rest of the file's statics exist yet.
+static retro_log_printf_t log_cb;
+// French OS+BASIC ROM set (464/6128 only). See ApplyMachineType for
+// provenance -- same origin as the already-bundled UK ROMs. Declared this
+// early for the same reason as log_cb above.
+static std::string rom_language_ = "uk";
 
 // On-screen keyboard font/rendering (STATUS.md gap #3). No text rendering
 // exists anywhere else in this core -- everything else is rectangles --
@@ -757,6 +765,19 @@ static void ArmAutorun(const char* command)
 {
    if (command == nullptr || *command == '\0')
       return;
+   // kAutorunKeys presses UK matrix positions. Confirmed empirically
+   // (screenshot, same raw (8,5) press): the French OS ROM is a real
+   // firmware AZERTY remap, not a keycap relabel -- UK 'a' echoes 'q'
+   // under it. Typing "RUN\"DISC\"" this way came out as `run2disc` ->
+   // Syntax error. Failing safe (skip the keystrokes, log why) beats
+   // failing loud (garbled autorun the user has no reason to suspect ROM
+   // language caused) until a real FR-position character table exists.
+   if (rom_language_ != "uk")
+   {
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_WARN, "Autorun/typed-command skipped: sugarbox_rom_language=%s remaps the keyboard at firmware level and kAutorunKeys assumes UK positions -- typing would produce wrong characters.\n", rom_language_.c_str());
+      return;
+   }
    size_t i = 0;
    for (; command[i] != '\0' && i < sizeof(autorun_sequence_) - 1; ++i)
    {
@@ -974,7 +995,6 @@ private:
 
 
 static struct retro_log_callback logging;
-static retro_log_printf_t log_cb;
 static float last_aspect;
 static float last_sample_rate;
 
@@ -1350,9 +1370,6 @@ static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
 static int crtc_type_option_ = -1;
-// French OS+BASIC ROM set (464/6128 only). See ApplyMachineType for
-// provenance -- same origin as the already-bundled UK ROMs.
-static std::string rom_language_ = "uk";
 
 // Picks the launch command for freshly-loaded media. drive_number == -1
 // means this was a tape, not a disk: the cassette firmware's RUN" with no
@@ -1895,7 +1912,15 @@ static void TickOsk()
    // on-screen one of. Force-closed rather than merely leaving START
    // unbound, in case a session switches into gx4000 while the panel
    // happens to already be open.
-   if (last_applied_model_ == "gx4000")
+   //
+   // sugarbox_rom_language != "uk": every label in both panels (command
+   // list and grid) is the character UK firmware echoes for that matrix
+   // position -- confirmed empirically that French firmware remaps the
+   // SAME position to a different character (real AZERTY, not a keycap
+   // relabel). Until a real FR-position table exists, the panel would
+   // show correct-looking labels that type the wrong thing, which is
+   // worse than not offering it at all.
+   if (last_applied_model_ == "gx4000" || rom_language_ != "uk")
    {
       osk_open_ = false;
       prev_start = prev_up = prev_down = prev_left = prev_right = false;
