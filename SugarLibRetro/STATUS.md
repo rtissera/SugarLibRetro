@@ -43,6 +43,8 @@ clean-room in our own MIT code. Never copy source.**
 | Multiface II ROM stripped from binary | was shipping Romantic Robot's commercial firmware in our .so |
 | Headless RAM-probe test harness | `tools/cpc_probe.sh` — permanent dev tooling |
 | .info metadata, input descriptors, PAL region fix | — |
+| Format-parser regression corpus | `tools/test_corpus.sh` — real DSK/EDSK/HFE/HFEv3/SCP/IPF/CTR/CDT samples, checked headlessly |
+| Printer-to-file capture | `sugarbox_printer_capture` (default off) — via the public `CSig::printer_port_` DI slot, no engine patch |
 
 ## WIP / partial
 
@@ -60,18 +62,9 @@ clean-room in our own MIT code. Never copy source.**
 
 Ranked by value:
 
-1. **Printer-to-file.**
-   `IPrinterPort` is dependency-injectable: `CSig::printer_port_` is a
-   **public** member (`Sig.h`), same DI slot pattern already used for
-   `RetroDisplay`/`RetroSound`/`RetroFdcNotify`. Engine's own
-   `PrinterDefault` is dead (`if (false) // TODO` stub) but we don't need to
-   fix it — just point `printer_port_` at our own `IPrinterPort`
-   implementation and never touch the engine class. Genuinely new finding
-   this pass; earlier notes wrongly filed this as engine-only.
-   Reference (read-only): JavaCPC's `TextPrinter`→`FileWriter`, Arnold's
-   printer-to-file. Output format is trivial (raw 7-bit text dump) — no real
-   need to study anything, could write clean-room from the CPC printer
-   protocol alone.
+1. ~~**Printer-to-file.**~~ **DONE (`bded622`)** — `sugarbox_printer_capture`,
+   default off. Verified end-to-end headless: `PRINT #8,"..."` produced a
+   byte-exact captured file when enabled, nothing when disabled.
 
 2. **Tape record/save.** Engine already exposes everything public via
    `EmulatorEngine::GetTape()`: `SaveAsWav`, `SaveAsCdtDrb`, `SaveAsCSW`,
