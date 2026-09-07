@@ -875,6 +875,7 @@ static DiskWriteMode disk_write_mode_ = DISK_WRITE_SIDECAR;
 // and Caprice Forever all do.
 enum DiskProtectMode { DISK_PROTECT_AUTO = 0, DISK_PROTECT_ON, DISK_PROTECT_OFF };
 static DiskProtectMode disk_protect_mode_ = DISK_PROTECT_AUTO;
+static bool drive_b_enabled_ = false;
 static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
@@ -889,6 +890,8 @@ static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
 {
    if (!autorun_enabled_ || load_ok != 0)
       return;
+   if (drive_number > 0)
+      return; // B: is a second disc, not the one we boot from
    if (drive_number < 0)
    {
       ArmAutorun("RUN\"\r");
@@ -1129,6 +1132,10 @@ void retro_set_environment(retro_environment_t cb)
       // is saved -- see MaybeWriteBackDisk.
       { "sugarbox_disk_write", "Save disk changes (EDSK only); sidecar|disabled|overwrite" },
       { "sugarbox_disk_write_protect", "Disk write protection; auto|on|off" },
+      // A real 6128 has one internal drive; B: is the second drive some
+      // multi-disc software expects. Fed from the playlist's second entry,
+      // the same convention the Amiga cores use for their extra drives.
+      { "sugarbox_drive_b", "Second disk drive (B:) from playlist; disabled|enabled" },
       { NULL, NULL },
    };
 
@@ -1583,6 +1590,11 @@ static void check_variables(void)
                        : DISK_WRITE_SIDECAR;
    }
 
+   var.key = "sugarbox_drive_b";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      drive_b_enabled_ = (strcmp(var.value, "enabled") == 0);
+
    var.key = "sugarbox_disk_write_protect";
    var.value = nullptr;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -1831,6 +1843,44 @@ static std::string GetSidecarPath(const std::string& source)
       name.erase(dot);
    return std::string(dir) + "/" + name + ".dsk";
 }
+
+// RetroArch hands a .m3u straight to the core rather than expanding it (the
+// core declares need_fullpath and lists m3u itself), so the playlist has to be
+// parsed here -- this file advertised m3u support and silently loaded nothing
+// at all before. Entries may be relative to the playlist, blank lines and
+// #comments are skipped, and #EXTINF-style directives are ignored.
+static std::vector<std::string> ParseM3u(const std::string& m3u_path)
+{
+   std::vector<std::string> entries;
+   FILE* f = fopen(m3u_path.c_str(), "rb");
+   if (f == nullptr)
+      return entries;
+
+   const size_t slash = m3u_path.find_last_of("/\\");
+   const std::string base = (slash == std::string::npos) ? std::string() : m3u_path.substr(0, slash + 1);
+
+   char line[1024];
+   while (fgets(line, sizeof(line), f) != nullptr)
+   {
+      std::string entry(line);
+      // strip CR/LF and surrounding blanks
+      while (!entry.empty() && (entry.back() == '\n' || entry.back() == '\r' ||
+                                entry.back() == ' '  || entry.back() == '\t'))
+         entry.pop_back();
+      size_t first = entry.find_first_not_of(" \t");
+      if (first == std::string::npos)
+         continue;
+      entry = entry.substr(first);
+      if (entry[0] == '#')
+         continue;
+      const bool absolute = (entry[0] == '/') || (entry.size() > 1 && entry[1] == ':');
+      entries.push_back(absolute ? entry : base + entry);
+   }
+   fclose(f);
+   return entries;
+}
+
+static bool IsM3uFile(const char* path) { return HasExtension(path, "m3u"); }
 
 static bool DiskFileIsEdsk(const std::string& path)
 {
@@ -2133,14 +2183,40 @@ bool retro_load_game(const struct retro_game_info *info)
       else
       {
          // Disk: EmulatorEngine::LoadDisk() auto-detects the real format
-         // from content and inserts it into drive A: (0) without needing a
-         // machine reset -- inserting a floppy doesn't reboot a real CPC
-         // either. Also seed the disk-control image list with it so
-         // set_image_index()/get_num_images() have something to report even
-         // before the frontend calls add_image_index() for an M3U's other
-         // entries.
-         disk_images_.push_back(info->path);
-         emulator_->LoadDisk(info->path, 0);
+         // from content and inserts it into a drive without needing a machine
+         // reset -- inserting a floppy doesn't reboot a real CPC either.
+         // A .m3u is a playlist, not an image: expand it so every entry shows
+         // up in the disk-control list, and put the first one in A:.
+         if (IsM3uFile(info->path))
+         {
+            disk_images_ = ParseM3u(info->path);
+            if (disk_images_.empty())
+            {
+               if (log_cb != nullptr)
+                  log_cb(RETRO_LOG_ERROR, "Playlist '%s' contains no usable entries.\n", info->path);
+               return false;
+            }
+            if (log_cb != nullptr)
+               log_cb(RETRO_LOG_INFO, "Playlist '%s': %u disc(s).\n",
+                  info->path, (unsigned)disk_images_.size());
+         }
+         else
+         {
+            disk_images_.push_back(info->path);
+         }
+
+         // B: takes the playlist's second entry, matching the convention the
+         // Amiga cores use for their additional drives. It is loaded FIRST and
+         // non-deferred: EmulatorEngine::LoadDisk()'s third argument is the
+         // FDC's "delayed" flag, and the FDC keeps only ONE pending deferred
+         // load (delayed_load_drive_/delayed_load_filepath_), so issuing two
+         // deferred loads back to back silently discards the first. Loading B
+         // immediately and leaving A's deferred load to be set last keeps A's
+         // existing, tested timing intact.
+         if (drive_b_enabled_ && disk_images_.size() > 1)
+            emulator_->LoadDisk(disk_images_[1].c_str(), 1, false);
+
+         emulator_->LoadDisk(disk_images_[0].c_str(), 0);
       }
    }
 
