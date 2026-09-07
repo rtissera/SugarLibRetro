@@ -854,6 +854,7 @@ static RetroDirectories directories_;
 static MachineSettings machine_settings_;
 static RetroFdcNotify fdc_notify_;
 static bool autorun_enabled_ = true;
+static bool disk_write_enabled_ = false;
 static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
@@ -1104,6 +1105,9 @@ void retro_set_environment(retro_environment_t cb)
       // "auto" uses the type the real machine shipped with (464/664 = 0,
       // 6128 = 1, Plus/GX4000 = 4); override when a demo needs another.
       { "sugarbox_crtc", "CRTC type; auto|0|1|2|3|4" },
+      // Off by default: this overwrites the image file in place. Only EDSK
+      // is saved -- see MaybeWriteBackDisk.
+      { "sugarbox_disk_write", "Write disk changes back to file (EDSK only); disabled|enabled" },
       { NULL, NULL },
    };
 
@@ -1549,6 +1553,11 @@ static void check_variables(void)
       }
    }
 
+   var.key = "sugarbox_disk_write";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      disk_write_enabled_ = (strcmp(var.value, "enabled") == 0);
+
    var.key = "sugarbox_monitor";
    var.value = nullptr;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -1660,12 +1669,88 @@ static bool IsTapeFile(const char* path)
           HasExtension(path, "voc") || HasExtension(path, "wav");
 }
 
+// ---------------------------------------------------------------------------
+// Writing a modified disk back to its file.
+//
+// What the engine can actually save, established by reading each format's
+// SaveDisk():
+//   EDSK, HFE, HFEv3, SCP, IPF -> real implementations
+//   DSK (plain "MV - CPC"), RAW, CTRAW -> return NOT_IMPLEMENTED, write nothing
+// Note this is the opposite way round from the obvious guess: the plain
+// sector format is the one that cannot be written, while the flux formats
+// can. Most .dsk files in the wild are actually EDSK ("EXTENDED CPC DSK
+// File") regardless of their extension, which is why saving works for them.
+//
+// Policy here: save EDSK only. The flux formats are preservation dumps and
+// rewriting one to persist a high score is not a trade worth making, even
+// though the engine would do it. Plain DSK/RAW/CTRAW cannot be saved at all
+// and are reported rather than silently dropped.
+//
+// The rename dance works around a real CPCCoreEmu bug: IDisk::SmartOpen()
+// compares the target's extension with strcmp() on Linux (stricmp on
+// Windows), so a file called "game.dsk" does not match the format's ".DSK"
+// and the writer appends instead of overwriting -- producing "game.dsk.DSK"
+// and leaving the original untouched. Saving and then renaming over the
+// original keeps the user's filename and is atomic on the same filesystem.
+static bool DiskFileIsEdsk(const std::string& path)
+{
+   FILE* f = fopen(path.c_str(), "rb");
+   if (f == nullptr)
+      return false;
+   char magic[24] = { 0 };
+   const size_t got = fread(magic, 1, sizeof(magic) - 1, f);
+   fclose(f);
+   return got >= 8 && strncmp(magic, "EXTENDED", 8) == 0;
+}
+
+static void MaybeWriteBackDisk(unsigned index)
+{
+   if (!disk_write_enabled_ || emulator_ == nullptr)
+      return;
+   if (index >= disk_images_.size() || disk_images_[index].empty())
+      return;
+   if (!emulator_->GetFDC()->IsDiskModified(0))
+      return;
+
+   const std::string& path = disk_images_[index];
+   if (!DiskFileIsEdsk(path))
+   {
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_WARN,
+            "Disk '%s' was modified, but this format has no writer in the engine "
+            "(only EDSK is saved); changes discarded.\n", path.c_str());
+      return;
+   }
+
+   // SmartOpen() will append ".DSK" unless the path already ends in exactly
+   // that, so this is where the engine puts the file.
+   const std::string written = (path.size() >= 4 && path.compare(path.size() - 4, 4, ".DSK") == 0)
+      ? path : path + ".DSK";
+   emulator_->SaveDisk(0);
+
+   if (written != path)
+   {
+      if (rename(written.c_str(), path.c_str()) != 0)
+      {
+         if (log_cb != nullptr)
+            log_cb(RETRO_LOG_ERROR, "Disk '%s': saved to '%s' but could not replace the original.\n",
+               path.c_str(), written.c_str());
+         return;
+      }
+   }
+   if (log_cb != nullptr)
+      log_cb(RETRO_LOG_INFO, "Disk '%s': changes written back.\n", path.c_str());
+}
+
 static bool dc_set_eject_state(bool ejected)
 {
    if (emulator_ == nullptr)
       return false;
    if (ejected)
+   {
+      MaybeWriteBackDisk(current_disk_index_);
       emulator_->Eject(0);
+   }
    else if (current_disk_index_ < disk_images_.size())
       emulator_->LoadDisk(disk_images_[current_disk_index_].c_str(), 0);
    disk_ejected_ = ejected;
@@ -1898,6 +1983,8 @@ bool retro_load_game(const struct retro_game_info *info)
 
 void retro_unload_game(void)
 {
+   // Last chance to persist: without this anything a game saved is lost.
+   MaybeWriteBackDisk(current_disk_index_);
    last_aspect = 0.0f;
    last_sample_rate = 0.0f;
 }
