@@ -29,15 +29,24 @@
 #include <mutex>
 #include <unistd.h>
 
-//#define WIDTH  768
+// Visible window cut out of the emulator's internal raster buffer, which is
+// 1024 ints wide with rows written at 2y (see RetroDisplay::GetVideoBuffer),
+// so roughly 1008 x 576 of it is real picture.
+//
+// "normal" is the long-standing crop: picture plus a thin border, which is
+// what most software expects. "full" widens it to show the CPC's overscan
+// region, which demos and a fair amount of French software draw into. The
+// frontend is told the full size as its maximum so the geometry can change at
+// runtime without a reinit; cap32 exposes the same idea as cap32_scr_crop.
 #define WIDTH  640
-//#define HEIGHT 277
 #define HEIGHT 480
-
-//#define OFFSET_X 143
 #define OFFSET_X 207
-//#define OFFSET_Y 47
 #define OFFSET_Y 84
+
+#define FULL_WIDTH  800
+#define FULL_HEIGHT 560
+#define FULL_OFFSET_X 112
+#define FULL_OFFSET_Y 8
 
 
 #define M_PI    3.14159265358979323846264338327950288   /* pi */
@@ -63,27 +72,38 @@ public:
       // Init
       video_buffer = new int[1024 * 1024];
       memset(video_buffer, 0, 1024 * 1024 * sizeof(int));
-      mono_buffer_ = new int[WIDTH * HEIGHT];
-      memset(mono_buffer_, 0, WIDTH * HEIGHT * sizeof(int));
+      mono_buffer_ = new int[FULL_WIDTH * FULL_HEIGHT];
+      memset(mono_buffer_, 0, FULL_WIDTH * FULL_HEIGHT * sizeof(int));
       pitch_ = 1024 * sizeof(unsigned int);
    };
    virtual ~RetroDisplay() { delete[] mono_buffer_; };
 
    void SetMonitorType(MonitorType type) { monitor_type_ = type; }
 
+   void SetFullBorder(bool on)
+   {
+      full_border_ = on;
+      crop_w_ = on ? FULL_WIDTH : WIDTH;
+      crop_h_ = on ? FULL_HEIGHT : HEIGHT;
+      crop_x_ = on ? FULL_OFFSET_X : OFFSET_X;
+      crop_y_ = on ? FULL_OFFSET_Y : OFFSET_Y;
+   }
+   int CropWidth() const { return crop_w_; }
+   int CropHeight() const { return crop_h_; }
+
    virtual void SetScanlines(int scan) {};
    virtual void Display() {};
    virtual bool AFrameIsReady() { return true; };
    virtual void Config() {};
    virtual const char* GetInformations() { return "Libretro GDI"; };
-   virtual int GetWidth() { return WIDTH; };
-   virtual int GetHeight() { return HEIGHT; };
+   virtual int GetWidth() { return crop_w_; };
+   virtual int GetHeight() { return crop_h_; };
    virtual void VSync(bool bDbg)
    {
-      const int* src = &video_buffer[OFFSET_X + 1024 * OFFSET_Y];
+      const int* src = &video_buffer[crop_x_ + 1024 * crop_y_];
       if (monitor_type_ == MONITOR_COLOR)
       {
-         video_cb(src, WIDTH, HEIGHT, pitch_);
+         video_cb(src, crop_w_, crop_h_, pitch_);
          return;
       }
 
@@ -99,11 +119,11 @@ public:
       // would compound every frame.
       //
       // Rec.601 luma, tinted to the phosphor colour.
-      for (int y = 0; y < HEIGHT; ++y)
+      for (int y = 0; y < crop_h_; ++y)
       {
          const int* in = src + 1024 * y;
-         int* out = mono_buffer_ + WIDTH * y;
-         for (int x = 0; x < WIDTH; ++x)
+         int* out = mono_buffer_ + crop_w_ * y;
+         for (int x = 0; x < crop_w_; ++x)
          {
             const unsigned int p = (unsigned int)in[x];
             const unsigned int r = (p >> 16) & 0xFF;
@@ -126,7 +146,7 @@ public:
             out[x] = (int)(0xFF000000u | (outr << 16) | (outg << 8) | outb);
          }
       }
-      video_cb(mono_buffer_, WIDTH, HEIGHT, WIDTH * sizeof(unsigned int));
+      video_cb(mono_buffer_, crop_w_, crop_h_, crop_w_ * sizeof(unsigned int));
    }
    virtual void StartSync(){};
    virtual void WaitVbl() {};
@@ -168,6 +188,8 @@ protected:
    int * video_buffer;
    int * mono_buffer_ = nullptr;
    MonitorType monitor_type_ = MONITOR_COLOR;
+   bool full_border_ = false;
+   int crop_w_ = WIDTH, crop_h_ = HEIGHT, crop_x_ = OFFSET_X, crop_y_ = OFFSET_Y;
    unsigned int pitch_;
 };
 
@@ -1090,11 +1112,11 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    info->timing.sample_rate = sampling_rate;
    
    //info->geometry = (struct retro_game_geometry) {
-   info->geometry.base_width = WIDTH;
-   info->geometry.base_height = HEIGHT;
+   info->geometry.base_width = display_.CropWidth();
+   info->geometry.base_height = display_.CropHeight();
 
-   info->geometry.max_width = WIDTH;
-   info->geometry.max_height = HEIGHT;
+   info->geometry.max_width = FULL_WIDTH;
+   info->geometry.max_height = FULL_HEIGHT;
    info->geometry.aspect_ratio = aspect;
 
    last_aspect = aspect;
@@ -1136,6 +1158,7 @@ void retro_set_environment(retro_environment_t cb)
       // multi-disc software expects. Fed from the playlist's second entry,
       // the same convention the Amiga cores use for their extra drives.
       { "sugarbox_drive_b", "Second disk drive (B:) from playlist; disabled|enabled" },
+      { "sugarbox_border", "Screen border; normal|full" },
       { NULL, NULL },
    };
 
@@ -1604,6 +1627,11 @@ static void check_variables(void)
                          : DISK_PROTECT_AUTO;
       ApplyDiskWriteProtect();
    }
+
+   var.key = "sugarbox_border";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      display_.SetFullBorder(strcmp(var.value, "full") == 0);
 
    var.key = "sugarbox_monitor";
    var.value = nullptr;
