@@ -1811,10 +1811,16 @@ void retro_set_environment(retro_environment_t cb)
       // sugarbox_rom_language below: this is about YOUR keyboard/pad,
       // that is about which machine is emulated.
       { "sugarbox_keyboard_layout", "Host keyboard layout; uk|fr" },
-      // Which OS+BASIC ROM set is emulated (464/6128 only -- no French
-      // 664 pair was ever sold). AMSDOS is language-independent, always
-      // the same file either way. See ApplyMachineType for provenance.
-      { "sugarbox_rom_language", "Emulated ROM language; uk|fr" },
+      // Which OS+BASIC ROM set is emulated. French: 464/6128 (no 664
+      // pair was ever sold). Spanish: 6128 only (no Spanish 464 BASIC ROM
+      // exists in this project's source -- falls back to plain UK 464).
+      // Typing (autorun/OSK) only has a real character table for uk/fr
+      // so far -- sp boots a real Spanish machine but ArmAutorun/the OSK
+      // fail safe (skip, log why) on it the same way they did for fr
+      // before kAutorunKeysFR existed, until a Spanish table is built.
+      // AMSDOS is language-independent, always the same file either way.
+      // See ApplyMachineType for provenance.
+      { "sugarbox_rom_language", "Emulated ROM language; uk|fr|sp" },
       // "green" is the authentic GT65 monochrome monitor the CPC shipped
       // with alongside the CTM644 colour one; amber is a convenience.
       { "sugarbox_monitor", "Monitor; color|green|amber" },
@@ -2356,15 +2362,19 @@ static void ApplyMachineType(const char* model)
    bool fdc_plugged = true;
    const char* cartridge_file = nullptr; // non-null => Plus/GX4000-style cartridge boot
 
-   // French ROM set (464/6128 only -- CPC664 was never sold outside UK/DE,
-   // no French pair exists to source). Same origin as the UK ROMs already
-   // bundled: SugarboxV2's own ROM folder, whose UK files are byte-for-byte
-   // (md5) identical to the ones this repo already shipped -- the FR pair
-   // sitting next to them carries the same provenance/redistribution basis
+   // French/Spanish ROM sets. Same origin as the UK ROMs already bundled:
+   // SugarboxV2's own ROM folder, whose UK files are byte-for-byte (md5)
+   // identical to the ones this repo already shipped -- the FR/SP pairs
+   // sitting next to them carry the same provenance/redistribution basis
    // Romain already confirmed for the UK set, not a new sourcing question.
    // AMSDOS is genuinely language-independent (only one variant exists in
    // that same ROM folder) -- slot 7 below stays "amsdos.rom" regardless.
+   // 664 has neither (never sold outside UK/DE). 464 has no Spanish BASIC
+   // ROM in that source at all (only "Rom A"/OS exists for 464 (SP)) --
+   // Spanish is 6128-only; falls through to plain UK 464 ROMs otherwise,
+   // same fail-safe posture as an unknown rom_language_ value elsewhere.
    const bool french = (rom_language_ == "fr");
+   const bool spanish = (rom_language_ == "sp");
 
    if (!strcmp(model, "664"))
    {
@@ -2421,8 +2431,8 @@ static void ApplyMachineType(const char* model)
    {
       hw = MachineSettings::OLD_6128;
       default_crtc = CRTC::UM6845R;
-      lower_rom = french ? "os6128_fr.rom" : "os6128.rom";
-      upper_rom = french ? "basic6128_fr.rom" : "basic6128.rom";
+      lower_rom = spanish ? "os6128_sp.rom" : french ? "os6128_fr.rom" : "os6128.rom";
+      upper_rom = spanish ? "basic6128_sp.rom" : french ? "basic6128_fr.rom" : "basic6128.rom";
       ram = MachineSettings::M128_K;
    }
 

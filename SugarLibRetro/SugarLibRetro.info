@@ -87,6 +87,14 @@ firmware11_desc = "amstradcpc/ROM/basic464_fr.rom (CPC 464 BASIC 1.0, French)"
 firmware11_path = "amstradcpc/ROM/basic464_fr.rom"
 firmware11_opt = "true"
 
-notes = "(!) amstradcpc/ROM/os6128.rom (md5): 9ba1b052c77713024bf2eb224cad2062|(!) amstradcpc/ROM/basic6128.rom (md5): 2cc1ba759f835c98a480a152d786b877|(!) amstradcpc/ROM/amsdos.rom (md5): 25629dfe870d097469c217b95fdc1c95|(!) amstradcpc/ROM/os464.rom (md5): a175623be3162846c46eae2ca1723031|(!) amstradcpc/ROM/basic464.rom (md5): f7f3b668537b135dd42195e76c5d490e|(!) amstradcpc/ROM/os664.rom (md5): 2b04cc6c472e2d405092dd10b26b074e|(!) amstradcpc/ROM/basic664.rom (md5): d81ab6eb0fa175124329bf56eec0a272|(!) amstradcpc/ROM/system.cpr (md5): 39b565e648172980aa552293e667070f|(!) amstradcpc/ROM/os6128_fr.rom (md5): 6ef8704c2816e66e8689a1b471827b42|(!) amstradcpc/ROM/basic6128_fr.rom (md5): 21509a8c20e3f6d96f21af895b4ac632|(!) amstradcpc/ROM/os464_fr.rom (md5): 78109e5e9bbd56916c32e56d9ca8ed42|(!) amstradcpc/ROM/basic464_fr.rom (md5): 824f521371695411e4b5da7f4734653a"
+firmware12_desc = "amstradcpc/ROM/os6128_sp.rom (CPC 6128 OS, Spanish)"
+firmware12_path = "amstradcpc/ROM/os6128_sp.rom"
+firmware12_opt = "true"
+
+firmware13_desc = "amstradcpc/ROM/basic6128_sp.rom (CPC 6128 BASIC 1.1, Spanish)"
+firmware13_path = "amstradcpc/ROM/basic6128_sp.rom"
+firmware13_opt = "true"
+
+notes = "(!) amstradcpc/ROM/os6128.rom (md5): 9ba1b052c77713024bf2eb224cad2062|(!) amstradcpc/ROM/basic6128.rom (md5): 2cc1ba759f835c98a480a152d786b877|(!) amstradcpc/ROM/amsdos.rom (md5): 25629dfe870d097469c217b95fdc1c95|(!) amstradcpc/ROM/os464.rom (md5): a175623be3162846c46eae2ca1723031|(!) amstradcpc/ROM/basic464.rom (md5): f7f3b668537b135dd42195e76c5d490e|(!) amstradcpc/ROM/os664.rom (md5): 2b04cc6c472e2d405092dd10b26b074e|(!) amstradcpc/ROM/basic664.rom (md5): d81ab6eb0fa175124329bf56eec0a272|(!) amstradcpc/ROM/system.cpr (md5): 39b565e648172980aa552293e667070f|(!) amstradcpc/ROM/os6128_fr.rom (md5): 6ef8704c2816e66e8689a1b471827b42|(!) amstradcpc/ROM/basic6128_fr.rom (md5): 21509a8c20e3f6d96f21af895b4ac632|(!) amstradcpc/ROM/os464_fr.rom (md5): 78109e5e9bbd56916c32e56d9ca8ed42|(!) amstradcpc/ROM/basic464_fr.rom (md5): 824f521371695411e4b5da7f4734653a|(!) amstradcpc/ROM/os6128_sp.rom (md5): 78c6b8912865b786efc7e91e3b0776c5|(!) amstradcpc/ROM/basic6128_sp.rom (md5): 8ba59e3889b049430e51b774c3b5d7e5"
 
 description = "SugarboxV2/CPCCore-based Amstrad CPC/CPC+/GX4000 core. Emulates the 464, 664, 6128, 6128+ and GX4000 models, switchable at runtime with no restart. Unlike other libretro Amstrad CPC cores, this one supports protected/flux-level disk formats (IPF/CAPS, CTRAW, HFE, SCP) in addition to plain DSK/EDSK, as well as tape (.cdt/.tap/.tzx/.csw/.voc/.wav) and .cpr cartridges. Disks and tapes are launched automatically: the core reads the inserted disc's own catalogue and types the right RUN\" command for you. Typing on the emulated keyboard yourself requires enabling RetroArch's Game Focus mode."
