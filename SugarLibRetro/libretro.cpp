@@ -1350,6 +1350,9 @@ static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
 static int crtc_type_option_ = -1;
+// French OS+BASIC ROM set (464/6128 only). See ApplyMachineType for
+// provenance -- same origin as the already-bundled UK ROMs.
+static std::string rom_language_ = "uk";
 
 // Picks the launch command for freshly-loaded media. drive_number == -1
 // means this was a tape, not a disk: the cassette firmware's RUN" with no
@@ -1674,8 +1677,14 @@ void retro_set_environment(retro_environment_t cb)
       // disk/tape load, matching cap32's own cap32_autorun option.
       { "sugarbox_autorun", "Autorun disk/tape; enabled|disabled" },
       // Host keyboard layout. Only affects which CPC key a physical host
-      // key presses -- see kKeyMapOverridesFR.
+      // key presses -- see kKeyMapOverridesFR. Independent of
+      // sugarbox_rom_language below: this is about YOUR keyboard/pad,
+      // that is about which machine is emulated.
       { "sugarbox_keyboard_layout", "Host keyboard layout; uk|fr" },
+      // Which OS+BASIC ROM set is emulated (464/6128 only -- no French
+      // 664 pair was ever sold). AMSDOS is language-independent, always
+      // the same file either way. See ApplyMachineType for provenance.
+      { "sugarbox_rom_language", "Emulated ROM language; uk|fr" },
       // "green" is the authentic GT65 monochrome monitor the CPC shipped
       // with alongside the CTM644 colour one; amber is a convenience.
       { "sugarbox_monitor", "Monitor; color|green|amber" },
@@ -2211,6 +2220,16 @@ static void ApplyMachineType(const char* model)
    bool fdc_plugged = true;
    const char* cartridge_file = nullptr; // non-null => Plus/GX4000-style cartridge boot
 
+   // French ROM set (464/6128 only -- CPC664 was never sold outside UK/DE,
+   // no French pair exists to source). Same origin as the UK ROMs already
+   // bundled: SugarboxV2's own ROM folder, whose UK files are byte-for-byte
+   // (md5) identical to the ones this repo already shipped -- the FR pair
+   // sitting next to them carries the same provenance/redistribution basis
+   // Romain already confirmed for the UK set, not a new sourcing question.
+   // AMSDOS is genuinely language-independent (only one variant exists in
+   // that same ROM folder) -- slot 7 below stays "amsdos.rom" regardless.
+   const bool french = (rom_language_ == "fr");
+
    if (!strcmp(model, "664"))
    {
       hw = MachineSettings::OLD_664;
@@ -2223,8 +2242,8 @@ static void ApplyMachineType(const char* model)
    {
       hw = MachineSettings::OLD_464;
       default_crtc = CRTC::HD6845S;
-      lower_rom = "os464.rom";
-      upper_rom = "basic464.rom";
+      lower_rom = french ? "os464_fr.rom" : "os464.rom";
+      upper_rom = french ? "basic464_fr.rom" : "basic464.rom";
       ram = MachineSettings::M64_K;
    }
    else if (!strcmp(model, "gx4000"))
@@ -2266,8 +2285,8 @@ static void ApplyMachineType(const char* model)
    {
       hw = MachineSettings::OLD_6128;
       default_crtc = CRTC::UM6845R;
-      lower_rom = "os6128.rom";
-      upper_rom = "basic6128.rom";
+      lower_rom = french ? "os6128_fr.rom" : "os6128.rom";
+      upper_rom = french ? "basic6128_fr.rom" : "basic6128.rom";
       ram = MachineSettings::M128_K;
    }
 
@@ -2347,6 +2366,19 @@ static void check_variables(void)
    var.key = "sugarbox_keyboard_layout";
    var.value = nullptr;
    ApplyKeyboardLayout((environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) ? var.value : "uk");
+
+   var.key = "sugarbox_rom_language";
+   var.value = nullptr;
+   {
+      const std::string previous_language = rom_language_;
+      rom_language_ = (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) ? var.value : "uk";
+      if (previous_language != rom_language_)
+      {
+         const std::string model = last_applied_model_;
+         last_applied_model_.clear();
+         ApplyMachineType(model.c_str());
+      }
+   }
 
    var.key = "sugarbox_crtc";
    var.value = nullptr;
