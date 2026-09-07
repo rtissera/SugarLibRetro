@@ -260,6 +260,43 @@ static const KeyMapEntry kKeyMap[] = {
    { RETROK_BACKSPACE,   9, 7 }, { RETROK_DELETE,  9, 7 },
 };
 
+// Combo-keys: maps a shoulder button straight to one CPC key that a
+// gamepad-only session (no physical keyboard, no on-screen keyboard yet --
+// see STATUS.md gap #4) otherwise cannot reach at all. L/L2/R/R2 are free:
+// only Left/Up/Down/Right/Fire1/Fire2 (X/A) are used anywhere else in this
+// core. Reuses the exact same matrix coordinates as kKeyMap above (see the
+// hardware matrix comment there) so there is exactly one source of truth
+// for where each CPC key lives.
+struct ComboKeyEntry { const char* name; int line; int bit; };
+static const ComboKeyEntry kComboKeys[] = {
+   { "none",     -1, -1 },
+   { "space",     5,  7 },
+   { "enter",     2,  2 },
+   { "esc",       8,  2 },
+   { "delete",    9,  7 },
+   { "tab",       8,  4 },
+   { "copy",      1,  1 },
+   { "control",   2,  7 },
+   { "capslock",  8,  6 },
+};
+
+static void LookupComboKey(const char* name, int* out_line, int* out_bit)
+{
+   *out_line = -1;
+   *out_bit = -1;
+   if (name == nullptr)
+      return;
+   for (size_t i = 0; i < sizeof(kComboKeys) / sizeof(kComboKeys[0]); ++i)
+   {
+      if (strcmp(name, kComboKeys[i].name) == 0)
+      {
+         *out_line = kComboKeys[i].line;
+         *out_bit = kComboKeys[i].bit;
+         return;
+      }
+   }
+}
+
 // AZERTY host-keyboard overrides (gap #8).
 //
 // RetroArch reports RETROK_* by PHYSICAL key position against a US/QWERTY
@@ -983,6 +1020,11 @@ enum DiskProtectMode { DISK_PROTECT_AUTO = 0, DISK_PROTECT_ON, DISK_PROTECT_OFF 
 static DiskProtectMode disk_protect_mode_ = DISK_PROTECT_AUTO;
 static bool drive_b_enabled_ = false;
 static bool playcity_enabled_ = false;
+// Combo-keys (see kComboKeys/LookupComboKey above). -1/-1 = "none".
+static int combo_l_line_ = -1, combo_l_bit_ = -1;
+static int combo_r_line_ = -1, combo_r_bit_ = -1;
+static int combo_l2_line_ = -1, combo_l2_bit_ = -1;
+static int combo_r2_line_ = -1, combo_r2_bit_ = -1;
 static std::string last_applied_model_;
 // -1 = "auto" (use the per-model default in ApplyMachineType); otherwise a
 // CRTC::TypeCRTC value forced by the user.
@@ -1335,6 +1377,13 @@ void retro_set_environment(retro_environment_t cb)
       // text file in the save directory (sugarbox_PRN####.TXT). Off by
       // default: it writes a file the user didn't ask for otherwise.
       { "sugarbox_printer_capture", "Printer output capture; disabled|enabled" },
+      // L/L2/R/R2 are unused everywhere else in this core -- lets a
+      // gamepad-only session reach keys the joystick matrix (arrows +
+      // 2 fire buttons) doesn't cover, with no on-screen keyboard yet.
+      { "sugarbox_combo_l", "L button (CPC key); space|enter|esc|delete|tab|copy|control|capslock|none" },
+      { "sugarbox_combo_r", "R button (CPC key); enter|space|esc|delete|tab|copy|control|capslock|none" },
+      { "sugarbox_combo_l2", "L2 button (CPC key); esc|space|enter|delete|tab|copy|control|capslock|none" },
+      { "sugarbox_combo_r2", "R2 button (CPC key); delete|space|enter|esc|tab|copy|control|capslock|none" },
       { NULL, NULL },
    };
 
@@ -1548,6 +1597,17 @@ static void update_input(void)
    if (joy_right) matrix[9] &= ~0x08;
    if (button_X)  matrix[9] &= ~0x10;
    if (button_A)  matrix[9] &= ~0x20;
+
+   // Combo-keys: see kComboKeys/LookupComboKey. -1 line means "none" (the
+   // button reads normally, nothing extra happens).
+   if (combo_l_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L))
+      matrix[combo_l_line_] &= ~(1 << combo_l_bit_);
+   if (combo_r_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R))
+      matrix[combo_r_line_] &= ~(1 << combo_r_bit_);
+   if (combo_l2_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2))
+      matrix[combo_l2_line_] &= ~(1 << combo_l2_bit_);
+   if (combo_r2_line_ >= 0 && input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2))
+      matrix[combo_r2_line_] &= ~(1 << combo_r2_bit_);
 
    for (size_t i = 0; i < active_keymap_size_; ++i)
    {
@@ -1819,6 +1879,26 @@ static void check_variables(void)
       playcity_enabled_ = (strcmp(var.value, "enabled") == 0);
       ApplyPlayCity();
    }
+
+   var.key = "sugarbox_combo_l";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      LookupComboKey(var.value, &combo_l_line_, &combo_l_bit_);
+
+   var.key = "sugarbox_combo_r";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      LookupComboKey(var.value, &combo_r_line_, &combo_r_bit_);
+
+   var.key = "sugarbox_combo_l2";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      LookupComboKey(var.value, &combo_l2_line_, &combo_l2_bit_);
+
+   var.key = "sugarbox_combo_r2";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      LookupComboKey(var.value, &combo_r2_line_, &combo_r2_bit_);
 
    var.key = "sugarbox_border";
    var.value = nullptr;
