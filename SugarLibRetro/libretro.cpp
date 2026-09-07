@@ -1692,6 +1692,78 @@ static bool IsTapeFile(const char* path)
 // and the writer appends instead of overwriting -- producing "game.dsk.DSK"
 // and leaving the original untouched. Saving and then renaming over the
 // original keeps the user's filename and is atomic on the same filesystem.
+// Multi-copy ("weak") sector detection, parsed straight from the EDSK file.
+//
+// EDSK records a protected sector by storing several recorded copies of it
+// back to back, so its actual data length in the sector-info table exceeds
+// the length its size code N implies. FormatTypeEDSK::SaveDisk() writes a
+// single pass over sides/tracks/sectors with no revolution loop, while the
+// loader tracks nb_recorded_revolutions/GetNbRevolutions() -- so saving a
+// protected disc silently flattens exactly the data the protection depends
+// on. Every emulator surveyed degrades protected EDSKs in some way (Arnold
+// overwrites one random copy, JavaCPC corrupts past 29 sectors/track,
+// ACE-DL's own strings warn "EDSK is NOT a proper dump format"); refusing is
+// the honest option until sidecar writes exist.
+//
+// Layout: 0x00 signature, 0x30 track count, 0x31 side count, 0x34 per-track
+// size table (in 256-byte units, 0 = unformatted). Each track: "Track-Info",
+// +0x14 size code N, +0x15 sector count, +0x18 sector list of 8 bytes
+// (C,H,R,N,ST1,ST2,actual-length-LE16).
+static bool EdskHasWeakSectors(const std::string& path)
+{
+   FILE* f = fopen(path.c_str(), "rb");
+   if (f == nullptr)
+      return false;
+   fseek(f, 0, SEEK_END);
+   const long size = ftell(f);
+   rewind(f);
+   if (size <= 0x100)
+   {
+      fclose(f);
+      return false;
+   }
+   std::vector<unsigned char> d((size_t)size);
+   const size_t got = fread(d.data(), 1, d.size(), f);
+   fclose(f);
+   if (got != d.size() || memcmp(d.data(), "EXTENDED", 8) != 0)
+      return false;
+
+   const unsigned tracks = d[0x30];
+   const unsigned sides = d[0x31];
+   const size_t count = (size_t)tracks * (size_t)sides;
+   if (0x34 + count > d.size())
+      return false;
+
+   size_t off = 0x100;
+   for (size_t t = 0; t < count; ++t)
+   {
+      const size_t track_size = (size_t)d[0x34 + t] * 256;
+      if (track_size == 0)
+         continue; // unformatted
+      if (off + 0x18 > d.size())
+         break;
+      if (memcmp(&d[off], "Track-Info", 10) == 0)
+      {
+         const unsigned nb_sectors = d[off + 0x15];
+         for (unsigned sct = 0; sct < nb_sectors; ++sct)
+         {
+            const size_t si = off + 0x18 + (size_t)sct * 8;
+            if (si + 8 > d.size())
+               break;
+            const unsigned n = d[si + 3];
+            const unsigned actual = (unsigned)d[si + 6] | ((unsigned)d[si + 7] << 8);
+            if (n < 8 && actual > (128u << n))
+            {
+               // More recorded data than the size code allows = extra copies.
+               return true;
+            }
+         }
+      }
+      off += track_size;
+   }
+   return false;
+}
+
 static bool DiskFileIsEdsk(const std::string& path)
 {
    FILE* f = fopen(path.c_str(), "rb");
@@ -1719,6 +1791,16 @@ static void MaybeWriteBackDisk(unsigned index)
          log_cb(RETRO_LOG_WARN,
             "Disk '%s' was modified, but this format has no writer in the engine "
             "(only EDSK is saved); changes discarded.\n", path.c_str());
+      return;
+   }
+
+   if (EdskHasWeakSectors(path))
+   {
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_WARN,
+            "Disk '%s' was modified, but it contains multi-copy (weak) sectors and "
+            "the EDSK writer stores only one copy -- saving would destroy the "
+            "protection. Changes discarded.\n", path.c_str());
       return;
    }
 
