@@ -245,10 +245,39 @@ Ranked by value:
 
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
-1. **Tape record/save.** Real crash in `CTape::Tick()` (unsigned underflow
-   recording onto a blank tape) plus a missing stop-recording primitive —
-   see the retracted Tier-1 entry above for the full root-cause writeup and
-   stack trace. Needs an engine fix before any wrapper attempt makes sense.
+1. ~~**Tape record/save.**~~ **DONE (2026-09-08)** — CPCCore is now
+   forked (`github.com/rtissera/CPCCore`, branch `reglinux-wip`), which
+   unblocked fixing this at the engine level instead of waiting on
+   upstream. Two real underflow/corruption bugs found and fixed in
+   `CTape`'s recording splice logic, each confirmed by literally
+   reverting the fix and re-running: the start-of-recording code indexed
+   `tape_array_[tape_position_-1]` at `tape_position_==0` (real SIGSEGV,
+   gdb-confirmed); the "shorten the following entry" overdub logic had a
+   no-op subtraction plus a hardcoded target index, driving a real
+   entry's length to `18446744073708754220` (a `uint64_t` wraparound)
+   under sustained overdubbing. Added `CTape::StopRecord()`, closing the
+   missing-stop-primitive gap that made the original wrapper attempt
+   unusable (arm the whole session, no way to end one). Four new CTests
+   (`UnitTests/TestTapeRecording.cpp`) cover both bugs, `StopRecord()`,
+   and — the one that actually matters — a real end-to-end round trip:
+   record a known signal, export via `SaveAsCdtCSW()`, reload into a
+   fresh machine, replay, confirm the signal survived.
+   `sugarbox_tape_record` (disabled|enabled) is wired for real:
+   toggling it live arms/disarms recording via the option itself (not
+   "on for the whole session" any more), exports to
+   `sugarbox_TAPE####.cdt` in the save directory, with a
+   `retro_unload_game()` safety net so quitting without disabling first
+   doesn't lose the recording. **Verified real, not assumed**: booted
+   with it enabled, typed a real `SAVE"A"` in BASIC, confirmed it
+   reaches `Ready`, terminated to trigger the safety-net export,
+   confirmed the exported file has the real CDT magic header — then, in
+   a completely separate fresh RetroArch process, loaded that exact file
+   and ran `CAT` on it: real CPC ROM output `A          block 1  $ Ok`,
+   the exact program name saved, with a valid checksum. Not yet
+   verified: recording onto/overdubbing an already-loaded real tape via
+   this wrapper (only the engine-level bug fix for that path has a real
+   test; the wrapper path only exercises fresh-blank-tape recording so
+   far).
 
 2. **Multiface II full wiring.** `multiface2_` sits under `protected:` in
    `Motherboard.h` with no accessor (unlike `play_city_`, which has a public
