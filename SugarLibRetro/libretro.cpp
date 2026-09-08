@@ -2020,6 +2020,17 @@ void retro_set_environment(retro_environment_t cb)
       // the previous attempt at this option had no way to stop a
       // recording once armed short of ejecting the tape.
       { "sugarbox_tape_record", "Record to a new blank tape; disabled|enabled" },
+      // "blank" is the behaviour above (fresh tape, always). "loaded"
+      // arms onto whatever tape is already in the drive instead -- no
+      // InsertBlankTape(), no Rewind(), starting from wherever the tape
+      // currently sits (including mid-way through real content, if
+      // playback already moved it there) -- a genuine overdub/punch-in,
+      // exercising the exact CTape code path
+      // OverdubOntoLoadedTapeDoesNotUnderflowNextEntryLength tests at the
+      // engine level. Read once, when sugarbox_tape_record's enabled edge
+      // fires -- changing this option alone, without re-toggling record,
+      // has no effect until the next arm.
+      { "sugarbox_tape_record_target", "Tape record target; blank|loaded" },
       // L/L2/R/R2 are unused everywhere else in this core -- lets a
       // gamepad-only session reach keys the joystick matrix (arrows +
       // 2 fire buttons) doesn't cover, with no on-screen keyboard yet.
@@ -2716,15 +2727,37 @@ static void ArmTapeRecording()
    CTape* tape = emulator_->GetTape();
    if (tape == nullptr)
       return;
-   // Fresh blank tape, not overdubbing whatever was in the drive -- see
-   // the core option's own description. Real 20-minute span (default
-   // duration), same as any other freshly-inserted blank cassette.
-   tape->InsertBlankTape();
-   tape->Rewind();
-   tape->SetMotorOn(true);
-   tape->Record();
-   if (log_cb != nullptr)
-      log_cb(RETRO_LOG_INFO, "Tape record: armed a fresh blank tape. Type SAVE in BASIC to write to it; disable sugarbox_tape_record to stop and export.\n");
+
+   struct retro_variable var = { "sugarbox_tape_record_target", nullptr };
+   const bool overdub = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
+                      && strcmp(var.value, "loaded") == 0;
+
+   if (overdub)
+   {
+      // Genuine overdub/punch-in: whatever tape is already in the drive,
+      // from wherever it currently sits (no Rewind() -- if real playback
+      // already moved the position, recording starts from there, not
+      // from the beginning). This is the CTape code path
+      // OverdubOntoLoadedTapeDoesNotUnderflowNextEntryLength exercises
+      // at the engine level.
+      tape->SetMotorOn(true);
+      tape->Record();
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_INFO, "Tape record: armed onto the loaded tape from its current position. Type SAVE in BASIC to write to it; disable sugarbox_tape_record to stop and export.\n");
+   }
+   else
+   {
+      // Fresh blank tape, not overdubbing whatever was in the drive --
+      // see the core option's own description. Real 20-minute span
+      // (default duration), same as any other freshly-inserted blank
+      // cassette.
+      tape->InsertBlankTape();
+      tape->Rewind();
+      tape->SetMotorOn(true);
+      tape->Record();
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_INFO, "Tape record: armed a fresh blank tape. Type SAVE in BASIC to write to it; disable sugarbox_tape_record to stop and export.\n");
+   }
 }
 
 static void StopTapeRecordingAndExport()
