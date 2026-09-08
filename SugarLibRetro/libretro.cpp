@@ -2008,6 +2008,18 @@ void retro_set_environment(retro_environment_t cb)
       // text file in the save directory (sugarbox_PRN####.TXT). Off by
       // default: it writes a file the user didn't ask for otherwise.
       { "sugarbox_printer_capture", "Printer output capture; disabled|enabled" },
+      // Toggling this ON/OFF (live, via the quick menu -- not just at
+      // load) is the actual arm/disarm gesture: turning it on inserts a
+      // fresh blank tape and starts recording immediately (discarding
+      // whatever tape was in the drive -- this is for capturing a NEW
+      // guest SAVE, not overdubbing an existing one), turning it off
+      // stops and exports whatever was recorded to sugarbox_TAPE####.cdt
+      // in the save directory. Needs CTape::StopRecord() (added
+      // alongside two real recording-array bugs it depends on staying
+      // fixed -- see CPCCore's Tape.cpp) to have a real disarm at all;
+      // the previous attempt at this option had no way to stop a
+      // recording once armed short of ejecting the tape.
+      { "sugarbox_tape_record", "Record to a new blank tape; disabled|enabled" },
       // L/L2/R/R2 are unused everywhere else in this core -- lets a
       // gamepad-only session reach keys the joystick matrix (arrows +
       // 2 fire buttons) doesn't cover, with no on-screen keyboard yet.
@@ -2690,7 +2702,72 @@ static void ApplyMachineType(const char* model)
    }
 }
 
-static void check_variables(void)
+// Tracks the LAST core-option value seen, not just its current state --
+// check_variables() re-reads every option whenever RetroArch reports ANY
+// of them changed, so this is how the disabled->enabled/enabled->disabled
+// EDGE (the real arm/disarm gesture) gets told apart from "still the same
+// value, something else changed this frame".
+static bool tape_record_enabled_ = false;
+
+static void ArmTapeRecording()
+{
+   if (emulator_ == nullptr)
+      return;
+   CTape* tape = emulator_->GetTape();
+   if (tape == nullptr)
+      return;
+   // Fresh blank tape, not overdubbing whatever was in the drive -- see
+   // the core option's own description. Real 20-minute span (default
+   // duration), same as any other freshly-inserted blank cassette.
+   tape->InsertBlankTape();
+   tape->Rewind();
+   tape->SetMotorOn(true);
+   tape->Record();
+   if (log_cb != nullptr)
+      log_cb(RETRO_LOG_INFO, "Tape record: armed a fresh blank tape. Type SAVE in BASIC to write to it; disable sugarbox_tape_record to stop and export.\n");
+}
+
+static void StopTapeRecordingAndExport()
+{
+   if (emulator_ == nullptr)
+      return;
+   CTape* tape = emulator_->GetTape();
+   if (tape == nullptr)
+      return;
+   tape->StopRecord();
+   if (tape->GetNbInversions() == 0)
+   {
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_INFO, "Tape record: stopped, nothing was recorded.\n");
+      return;
+   }
+
+   const char* dir = nullptr;
+   if (!environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || dir == nullptr || *dir == '\0')
+      dir = "/tmp";
+   // Same first-free-number convention as RetroPrinter's PRN####.TXT --
+   // never overwrites a previous recording.
+   char path[4096];
+   unsigned i = 0;
+   for (; i <= 9999; ++i)
+   {
+      snprintf(path, sizeof(path), "%s/sugarbox_TAPE%04u.cdt", dir, i);
+      if (access(path, F_OK) != 0)
+         break;
+   }
+   tape->SaveAsCdtCSW(path);
+   if (log_cb != nullptr)
+      log_cb(RETRO_LOG_INFO, "Tape record: stopped, exported to '%s'.\n", path);
+}
+
+// apply_tape_record: false when called from retro_load_game() BEFORE the
+// content-loading dispatch runs below it -- arming there would insert a
+// blank tape only for the immediately-following LoadTape()/LoadDisk() to
+// overwrite it right back with the real content, silently losing the
+// arm. retro_load_game() re-applies it itself, explicitly, AFTER content
+// has loaded. Every other call site (retro_run()'s live-toggle check)
+// wants the normal, immediate behaviour.
+static void check_variables(bool apply_tape_record = true)
 {
    struct retro_variable var = { 0 };
    var.key = "amstradcpc_model";
@@ -2764,6 +2841,21 @@ static void check_variables(void)
    var.value = nullptr;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
       retro_printer_.SetEnabled(strcmp(var.value, "enabled") == 0);
+
+   var.key = "sugarbox_tape_record";
+   var.value = nullptr;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      const bool want_enabled = (strcmp(var.value, "enabled") == 0);
+      if (apply_tape_record)
+      {
+         if (want_enabled && !tape_record_enabled_)
+            ArmTapeRecording();
+         else if (!want_enabled && tape_record_enabled_)
+            StopTapeRecordingAndExport();
+      }
+      tape_record_enabled_ = want_enabled;
+   }
 
    var.key = "sugarbox_playcity";
    var.value = nullptr;
@@ -3354,7 +3446,9 @@ bool retro_load_game(const struct retro_game_info *info)
    current_disk_index_ = 0;
    disk_ejected_ = false;
 
-   check_variables();
+   // Defer tape-record arming until after content has loaded below --
+   // see check_variables()'s own comment on why.
+   check_variables(false);
 
    if (info != nullptr && info->path != nullptr)
    {
@@ -3435,6 +3529,13 @@ bool retro_load_game(const struct retro_game_info *info)
       }
    }
 
+   // Now that content has actually loaded, it is safe to arm tape
+   // recording -- doing it any earlier (see check_variables()'s comment)
+   // just gets the blank tape immediately overwritten by whatever
+   // LoadTape()/LoadDisk() above just inserted.
+   if (tape_record_enabled_)
+      ArmTapeRecording();
+
    // Last, so it wins over whatever autorun the media selected.
    ArmTestHookIfRequested();
 
@@ -3446,6 +3547,15 @@ void retro_unload_game(void)
    // Last chance to persist: without this anything a game saved is lost.
    MaybeWriteBackDisk(current_disk_index_);
    retro_printer_.Close();
+   // Same reasoning: a user who quits (or swaps content) with
+   // sugarbox_tape_record still enabled would otherwise lose the whole
+   // recording -- check_variables() only exports on the enabled->disabled
+   // edge, which never fires if the session just ends instead.
+   if (tape_record_enabled_)
+   {
+      StopTapeRecordingAndExport();
+      tape_record_enabled_ = false;
+   }
    last_aspect = 0.0f;
    last_sample_rate = 0.0f;
 }
