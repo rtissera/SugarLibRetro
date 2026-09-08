@@ -162,30 +162,29 @@ Ranked by value:
    BASIC line (typed with no trailing Enter) only executed once the bound
    button was actually pressed via RetroArch's own input path.
 
-5. **Lightgun hit-detection verification.** Real test software found
-   (`886b4d9`'s commit message) — CPCWiki hosts an official Magnum Light
-   Phaser disc dump (Operation Wolf, Bullseye, Robot Attack, Rookie, Solar
-   Invasion, Missile Ground Zero). Boots correctly (real "Aim At The Game
-   Of Your Choice" lightgun menu renders). A real coordinate-math bug WAS
-   found and fixed this way: the gun_x/gun_y transform hardcoded the
-   "normal border" WIDTH/HEIGHT/OFFSET_X/OFFSET_Y constants instead of
-   `display_`'s actual current crop dimensions, silently mis-scaling every
-   shot under `sugarbox_border=full` (fixed, `886b4d9`). Full end-to-end
-   hit-detection still UNVERIFIED, but the reason is now a confirmed
-   RetroArch bug, not an environment gap: re-tested under a real window
-   manager (metacity) with a real focused window (not headless Xvfb) and
-   `RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y` still read back as a constant 0
-   regardless of real mouse position — while `RETRO_DEVICE_POINTER` on the
-   exact same click DID report real, distinct coordinates in the same
-   run, ruling out "the mouse position isn't reaching RetroArch" as the
-   cause. RetroArch's own `CHANGES.md`: "Pointer and lightgun handling
-   sanitization on Windows and Linux desktop platforms... will now report
-   edge and offscreen positions in a harmonized way, and will not return
-   0 instead" landed in **1.20.0**; this project's installed RetroArch is
-   **1.18.0** (Ubuntu 24.04's packaged version, no newer one available via
-   apt, no sudo for a PPA/AppImage) — exactly the bug that entry
-   describes (`d7b3a7e`). Needs RetroArch >=1.20.0 to actually verify;
-   not fixable from this core's side.
+5. ~~**Lightgun hit-detection verification.**~~ **DONE (`f3aa7c2`)** —
+   real test software found on CPCWiki (`886b4d9`'s commit message): an
+   official Magnum Light Phaser disc dump (Operation Wolf, Bullseye,
+   Robot Attack, Rookie, Solar Invasion, Missile Ground Zero). A real
+   coordinate-math bug was found and fixed along the way: the gun_x/gun_y
+   transform hardcoded the "normal border" WIDTH/HEIGHT/OFFSET_X/OFFSET_Y
+   constants instead of `display_`'s actual current crop dimensions,
+   silently mis-scaling every shot under `sugarbox_border=full` (fixed,
+   `886b4d9`). Verification then hit a real RetroArch 1.18.0 bug (Ubuntu
+   24.04's packaged version) — `RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y` read
+   back as a constant 0 regardless of real mouse position, confirmed
+   fixed in RetroArch's own `CHANGES.md` as of 1.20.0 (`d7b3a7e`). Built
+   RetroArch 1.22.2 from source to get past it (no sudo needed — built to
+   a local dir, not installed system-wide; `--disable-vulkan` for a
+   missing `-lX11-xcb` dev symlink worked around via `LIBRARY_PATH`, and
+   `--disable-xscrnsaver` for a real segfault in `XScreenSaverQueryExtension`
+   under Xvfb). Real, complete chain confirmed working under 1.22.2: the
+   "Aim At The Game Of Your Choice" menu selects the item actually aimed
+   at (small fixed calibration offset, consistent with CPCWiki's own note
+   that real Magnum hardware only has ~1 CRTC line of vertical accuracy),
+   Robot Attack's own in-game "PLEASE AIM AT THE LINE AND PULL THE
+   TRIGGER" calibration screen accepted a real click, and gameplay
+   responded to real trigger pulls (score changed from a shot).
 
 6. ~~**Real French keyboard typing**~~ **DONE (`50b62e1`)** —
    `kAutorunKeysFR` + `kOskGridFR`, built from real measured data (typed
