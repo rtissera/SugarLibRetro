@@ -2317,7 +2317,7 @@ static void update_input(void)
    button_X = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X);
    button_A = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A);
 
-   // Lightgun (gap #10) -- real, period-accurate CPC hardware ("Magnum
+   // Lightgun -- real, period-accurate CPC hardware ("Magnum
    // Light Phaser"/GUNSTICK): CRTC.cpp compares gun_x_/gun_y_ against the
    // live raster beam position (monitor_->x_, monitor_->y_*2) each tick,
    // exactly the standard lightgun emulation technique. gun_x_/gun_y_ are
@@ -2336,25 +2336,26 @@ static void update_input(void)
    // over the displayed frame; IS_OFFSCREEN reports a shot pointed outside
    // it (RELOAD gesture in most frontends).
    //
-   // NOTE: found real Magnum Light Phaser test software this round
-   // (CPCWiki's own Magnum.zip disc dump -- Operation Wolf, Bullseye,
-   // Robot Attack, Rookie, Solar Invasion, Missile Ground Zero) and tried
-   // twice to verify real hit-detection with it: first headless (Xvfb, no
-   // window manager), then again under a real WM (metacity) with a real
-   // focused window -- both attempts read RETRO_DEVICE_ID_LIGHTGUN_
-   // SCREEN_X/Y back as a constant 0 regardless of actual mouse position
-   // (confirmed with debug logging both times), while RETRO_DEVICE_POINTER
-   // on the very same click DID report real, distinct coordinates. Root
-   // cause found in RetroArch's own CHANGES.md, not an environment issue:
-   // "INPUT: Pointer and lightgun handling sanitization on Windows and
-   // Linux desktop platforms... will now report edge and offscreen
-   // positions in a harmonized way, and will not return 0 instead" landed
-   // in RetroArch 1.20.0; this project's installed RetroArch is 1.18.0
-   // (Ubuntu 24.04's packaged version), which has the bug the fix
-   // describes. Coordinate math (this transform) remains logically
-   // consistent with CRTC.cpp's own comparison and is now also
-   // border-mode-correct, but end-to-end verification needs RetroArch
-   // >=1.20.0.
+   // VERIFIED REAL, end to end: RetroArch 1.18.0 (Ubuntu 24.04's packaged
+   // version) has a lightgun bug -- RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y
+   // reads back as a constant 0 regardless of real mouse position
+   // (confirmed with debug logging; RETRO_DEVICE_POINTER on the same
+   // click DID report real coordinates, ruling out an environment/focus
+   // issue). RetroArch's own CHANGES.md: "Pointer and lightgun handling
+   // sanitization on Windows and Linux desktop platforms... will now
+   // report edge and offscreen positions in a harmonized way, and will
+   // not return 0 instead" landed in 1.20.0. Built RetroArch 1.22.2 from
+   // source to confirm (no sudo available for a newer package; see
+   // project_sugarbox_libretro_core_matrix.md for the exact build recipe)
+   // and tested with the real Magnum Light Phaser disc (CPCWiki's
+   // Magnum.zip -- Operation Wolf, Bullseye, Robot Attack, Rookie, Solar
+   // Invasion, Missile Ground Zero): the real "Aim At The Game Of Your
+   // Choice" menu correctly selected the item actually aimed at (after
+   // accounting for a small, constant, expected-per-CPCWiki calibration
+   // offset), Robot Attack's own real in-game "PLEASE AIM AT THE LINE AND
+   // PULL THE TRIGGER" calibration screen accepted a real click, and
+   // gameplay afterwards responded to real trigger pulls (score changed
+   // from a shot). This transform is correct.
    if (emulator_ != nullptr)
    {
       const bool gun_offscreen = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN);
