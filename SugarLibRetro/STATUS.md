@@ -171,12 +171,21 @@ Ranked by value:
    "normal border" WIDTH/HEIGHT/OFFSET_X/OFFSET_Y constants instead of
    `display_`'s actual current crop dimensions, silently mis-scaling every
    shot under `sugarbox_border=full` (fixed, `886b4d9`). Full end-to-end
-   hit-detection still UNVERIFIED: RetroArch's sdl2 driver reads
-   `RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y` back as a constant 0 regardless of
-   real mouse position in this project's headless Xvfb test setup
-   (confirmed with debug logging) — looks like it needs a real window
-   manager/non-headless session, not something fixable in this core.
-   Needs re-attempting in a normal desktop session.
+   hit-detection still UNVERIFIED, but the reason is now a confirmed
+   RetroArch bug, not an environment gap: re-tested under a real window
+   manager (metacity) with a real focused window (not headless Xvfb) and
+   `RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y` still read back as a constant 0
+   regardless of real mouse position — while `RETRO_DEVICE_POINTER` on the
+   exact same click DID report real, distinct coordinates in the same
+   run, ruling out "the mouse position isn't reaching RetroArch" as the
+   cause. RetroArch's own `CHANGES.md`: "Pointer and lightgun handling
+   sanitization on Windows and Linux desktop platforms... will now report
+   edge and offscreen positions in a harmonized way, and will not return
+   0 instead" landed in **1.20.0**; this project's installed RetroArch is
+   **1.18.0** (Ubuntu 24.04's packaged version, no newer one available via
+   apt, no sudo for a PPA/AppImage) — exactly the bug that entry
+   describes (`d7b3a7e`). Needs RetroArch >=1.20.0 to actually verify;
+   not fixable from this core's side.
 
 6. ~~**Real French keyboard typing**~~ **DONE (`50b62e1`)** —
    `kAutorunKeysFR` + `kOskGridFR`, built from real measured data (typed
