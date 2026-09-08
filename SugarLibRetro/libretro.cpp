@@ -528,6 +528,8 @@ public:
    }
    int CropWidth() const { return crop_w_; }
    int CropHeight() const { return crop_h_; }
+   int CropOffsetX() const { return crop_x_; }
+   int CropOffsetY() const { return crop_y_; }
 
    virtual void SetScanlines(int scan) {};
    virtual void Display() {};
@@ -2321,19 +2323,31 @@ static void update_input(void)
    // exactly the standard lightgun emulation technique. gun_x_/gun_y_ are
    // in the SAME raw coordinate space RetroDisplay::GetVideoBuffer()/VSync()
    // already use (a 1024-wide internal buffer, row-doubled -- VSync crops
-   // the WIDTHxHEIGHT frame RetroArch actually displays starting at
-   // (OFFSET_X, OFFSET_Y) within it), so converting the frontend's
-   // normalized on-screen gun position back to that space is just adding
-   // the same offsets. SCREEN_X/Y are absolute positions in [-0x8000,
-   // 0x7FFF] over the displayed frame; IS_OFFSCREEN reports a shot pointed
-   // outside it (RELOAD gesture in most frontends).
+   // the currently-displayed frame starting at (CropOffsetX(), CropOffsetY())
+   // within it), so converting the frontend's normalized on-screen gun
+   // position back to that space is just adding the same offsets. Uses
+   // display_.CropWidth()/CropHeight()/CropOffsetX()/CropOffsetY() rather
+   // than the WIDTH/HEIGHT/OFFSET_X/OFFSET_Y "normal border" constants
+   // directly -- sugarbox_border=full reports FULL_WIDTH/FULL_HEIGHT as
+   // the base geometry RetroArch normalizes SCREEN_X/Y against (see
+   // retro_get_system_av_info), so hardcoding the normal-border constants
+   // here would silently mis-scale every shot whenever full border is
+   // selected. SCREEN_X/Y are absolute positions in [-0x8000, 0x7FFF]
+   // over the displayed frame; IS_OFFSCREEN reports a shot pointed outside
+   // it (RELOAD gesture in most frontends).
    //
-   // NOTE: unlike every other feature this session, this has NOT been
-   // verified against real lightgun-aware CPC software (none was
-   // available to test with) -- the coordinate math follows directly from
-   // reading CRTC.cpp's own comparison and RetroDisplay's existing crop
-   // offsets, but whether a shot lands correctly in an actual game is
-   // unconfirmed.
+   // NOTE: found real Magnum Light Phaser test software this round
+   // (CPCWiki's own Magnum.zip disc dump -- Operation Wolf, Bullseye,
+   // Robot Attack, Rookie, Solar Invasion, Missile Ground Zero) and
+   // attempted a real headless hit-detection test, but couldn't get
+   // SDL2's lightgun SCREEN_X/Y to reflect real mouse movement under
+   // Xvfb (RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y read back as a constant 0
+   // regardless of actual xdotool mouse position -- confirmed with debug
+   // logging, not just inferred from behaviour; likely needs a real
+   // window manager/non-headless X session RetroArch's SDL2 driver will
+   // treat as focused, not something this core controls). Coordinate math
+   // still unconfirmed end-to-end; the border-mode scaling bug above WAS
+   // found and fixed this round despite that.
    if (emulator_ != nullptr)
    {
       const bool gun_offscreen = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN);
@@ -2346,9 +2360,9 @@ static void update_input(void)
          const int16_t gun_x = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X);
          const int16_t gun_y = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_Y);
          const bool gun_trigger = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_TRIGGER);
-         const int displayed_x = ((int)gun_x + 0x8000) * WIDTH / 0x10000;
-         const int displayed_y = ((int)gun_y + 0x8000) * HEIGHT / 0x10000;
-         emulator_->GunSet(displayed_x + OFFSET_X, displayed_y + OFFSET_Y, gun_trigger ? 1 : 0);
+         const int displayed_x = ((int)gun_x + 0x8000) * display_.CropWidth() / 0x10000;
+         const int displayed_y = ((int)gun_y + 0x8000) * display_.CropHeight() / 0x10000;
+         emulator_->GunSet(displayed_x + display_.CropOffsetX(), displayed_y + display_.CropOffsetY(), gun_trigger ? 1 : 0);
       }
    }
 
