@@ -162,9 +162,21 @@ Ranked by value:
    BASIC line (typed with no trailing Enter) only executed once the bound
    button was actually pressed via RetroArch's own input path.
 
-5. **Lightgun hit-detection verification.** Not code — needs CPC
-   lightgun-compatible test software, none found yet. Independent of both
-   sides.
+5. **Lightgun hit-detection verification.** Real test software found
+   (`886b4d9`'s commit message) — CPCWiki hosts an official Magnum Light
+   Phaser disc dump (Operation Wolf, Bullseye, Robot Attack, Rookie, Solar
+   Invasion, Missile Ground Zero). Boots correctly (real "Aim At The Game
+   Of Your Choice" lightgun menu renders). A real coordinate-math bug WAS
+   found and fixed this way: the gun_x/gun_y transform hardcoded the
+   "normal border" WIDTH/HEIGHT/OFFSET_X/OFFSET_Y constants instead of
+   `display_`'s actual current crop dimensions, silently mis-scaling every
+   shot under `sugarbox_border=full` (fixed, `886b4d9`). Full end-to-end
+   hit-detection still UNVERIFIED: RetroArch's sdl2 driver reads
+   `RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y` back as a constant 0 regardless of
+   real mouse position in this project's headless Xvfb test setup
+   (confirmed with debug logging) — looks like it needs a real window
+   manager/non-headless session, not something fixable in this core.
+   Needs re-attempting in a normal desktop session.
 
 6. ~~**Real French keyboard typing**~~ **DONE (`50b62e1`)** —
    `kAutorunKeysFR` + `kOskGridFR`, built from real measured data (typed
