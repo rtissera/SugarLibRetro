@@ -1,3 +1,4 @@
 [submodule "CPCCore"]
 	path = CPCCore
-	url = https://github.com/Tom1975/CPCCore
+	url = https://github.com/rtissera/CPCCore
+	branch = reglinux-wip
