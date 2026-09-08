@@ -2338,16 +2338,23 @@ static void update_input(void)
    //
    // NOTE: found real Magnum Light Phaser test software this round
    // (CPCWiki's own Magnum.zip disc dump -- Operation Wolf, Bullseye,
-   // Robot Attack, Rookie, Solar Invasion, Missile Ground Zero) and
-   // attempted a real headless hit-detection test, but couldn't get
-   // SDL2's lightgun SCREEN_X/Y to reflect real mouse movement under
-   // Xvfb (RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X/Y read back as a constant 0
-   // regardless of actual xdotool mouse position -- confirmed with debug
-   // logging, not just inferred from behaviour; likely needs a real
-   // window manager/non-headless X session RetroArch's SDL2 driver will
-   // treat as focused, not something this core controls). Coordinate math
-   // still unconfirmed end-to-end; the border-mode scaling bug above WAS
-   // found and fixed this round despite that.
+   // Robot Attack, Rookie, Solar Invasion, Missile Ground Zero) and tried
+   // twice to verify real hit-detection with it: first headless (Xvfb, no
+   // window manager), then again under a real WM (metacity) with a real
+   // focused window -- both attempts read RETRO_DEVICE_ID_LIGHTGUN_
+   // SCREEN_X/Y back as a constant 0 regardless of actual mouse position
+   // (confirmed with debug logging both times), while RETRO_DEVICE_POINTER
+   // on the very same click DID report real, distinct coordinates. Root
+   // cause found in RetroArch's own CHANGES.md, not an environment issue:
+   // "INPUT: Pointer and lightgun handling sanitization on Windows and
+   // Linux desktop platforms... will now report edge and offscreen
+   // positions in a harmonized way, and will not return 0 instead" landed
+   // in RetroArch 1.20.0; this project's installed RetroArch is 1.18.0
+   // (Ubuntu 24.04's packaged version), which has the bug the fix
+   // describes. Coordinate math (this transform) remains logically
+   // consistent with CRTC.cpp's own comparison and is now also
+   // border-mode-correct, but end-to-end verification needs RetroArch
+   // >=1.20.0.
    if (emulator_ != nullptr)
    {
       const bool gun_offscreen = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_IS_OFFSCREEN);
