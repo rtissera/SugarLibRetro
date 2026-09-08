@@ -273,11 +273,20 @@ Ranked by value:
    confirmed the exported file has the real CDT magic header — then, in
    a completely separate fresh RetroArch process, loaded that exact file
    and ran `CAT` on it: real CPC ROM output `A          block 1  $ Ok`,
-   the exact program name saved, with a valid checksum. Not yet
-   verified: recording onto/overdubbing an already-loaded real tape via
-   this wrapper (only the engine-level bug fix for that path has a real
-   test; the wrapper path only exercises fresh-blank-tape recording so
-   far).
+   the exact program name saved, with a valid checksum.
+
+   **Overdub closed too**: `sugarbox_tape_record_target` (`blank|loaded`,
+   default `blank` — existing behavior unchanged) picks what gets armed.
+   `blank` is the path above; `loaded` skips `InsertBlankTape()`/
+   `Rewind()` entirely and arms onto whatever tape is already in the
+   drive from wherever it currently sits — the real overdub/punch-in
+   scenario two of the engine bug fixes above live in, previously only
+   covered by the engine-level test, not the actual wrapper a user would
+   touch. Verified the same way: loaded a real commercial tape (Bubble
+   Bobble), armed with `target=loaded`, typed `SAVE"B"`, reached `Ready`,
+   terminated to export, reloaded the exported file in a separate fresh
+   process, `CAT` showed `B          block 1  $ Ok`. No more open items
+   for tape record/save.
 
 2. **Multiface II full wiring.** `multiface2_` sits under `protected:` in
    `Motherboard.h` with no accessor (unlike `play_city_`, which has a public
