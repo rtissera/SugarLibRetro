@@ -38,7 +38,7 @@ clean-room in our own MIT code. Never copy source.**
 | Disk write-back (EDSK) | sidecar default, overwrite opt-in, weak-sector guard |
 | Emulated write-protect tab | — |
 | Border crop (normal/full) | — |
-| PlayCity (2nd AY + Z80 CTC) | wired via public `CSig::exp_list_`, default off. **Audio was totally silent until the engine fix below** — now verified emitting real tones, with CTC-programmed clock rates measured accurate to <1%. Stereo side assignment changed but contested, see item 9. NOT unique — ACE/ACE-DL, MAME and MiSTer have it too |
+| PlayCity (2nd AY + Z80 CTC) | wired via public `CSig::exp_list_`, default off. **Audio was totally silent until the engine fix below** — now verified emitting real tones on the correct stereo sides, with CTC-programmed clock rates measured accurate to <1%. NOT unique — ACE/ACE-DL, MAME and MiSTer have it too |
 | RAM export + memory map | RetroArch cheat/debug support |
 | Multiface II ROM stripped from binary | was shipping Romantic Robot's commercial firmware in our .so |
 | Headless RAM-probe test harness | `tools/cpc_probe.sh` — permanent dev tooling |
@@ -372,25 +372,31 @@ Ranked by value:
      linked next to the binary, or the tape tests fail on their own
      "source tape did not actually load" guard rather than on real breakage.
 
-9. **PlayCity stereo channels — swap sent as PR #35, but CONTESTED.** The two
-   YMZ294s were constructed `LEFT`/`RIGHT` while the port decode feeds
-   `ymz294_1_` from `&F884`/`&F984`. Whether that is a bug depends on which
-   port pair is the right channel, and **the sources genuinely disagree**:
-   - **`&F884`/`&F984` = RIGHT** (what PR #35 implements): CPCWiki's PlayCity
-     page, i.e. TotO's own hardware documentation, which states it three times;
-     and MAME's `playcity.cpp`. MAME is probably *not* independent here — its
-     CTC clock table is a digit-for-digit transcription of that same wiki page.
-   - **`&F884`/`&F984` = LEFT** (i.e. the original code was right): MiSTer's
-     `rtl/playcity/playcity.v` (`// addr[2] - left`, `psg_left` takes
-     `BDIR = ay_sel & addr[2]`), and SyX's PlayCity example sources linked from
-     the wiki itself (`supergrafx.i`: `YMZ_WRITE_LEFT EQU $F884`).
+9. ~~**PlayCity stereo channels swapped.**~~ **DONE, sent upstream as PR #35
+   (2026-09-09).** The two YMZ294s were constructed `LEFT`/`RIGHT` while the
+   port decode feeds `ymz294_1_` from `&F884`/`&F984`, so every PlayCity tune
+   played on the wrong speaker. Verified by driving each chip alone and
+   capturing real PCM: `&F884`/`&F984` moved from LEFT to RIGHT,
+   `&F888`/`&F988` confirmed LEFT, full separation both ways.
 
-   Current judgement, not a settled fact: MiSTer cites that same wiki page as
-   its reference and then contradicts its prose, which looks like an
-   implementation slip; SyX's are convenience labels in a player where the
-   choice has no musical consequence. So the designer's own doc is the
-   best-supported reading. **No schematic or real hardware was available to
-   settle it** — flagged as contested on the PR so Thomas can decide.
+   The sources initially looked split, so this was checked carefully rather
+   than assumed:
+
+   | source | `&F884`/`&F984` |
+   |---|---|
+   | CPCWiki — TotO's own hardware page, states it 3x | RIGHT |
+   | Arkos Tracker AKY Multi-PSG player (Targhan) | RIGHT |
+   | MAME `playcity.cpp` | RIGHT |
+   | MiSTer `playcity.v` | LEFT |
+   | SyX `supergrafx.i` (2013 examples) | LEFT |
+
+   Arkos settles it: it is the player real PlayCity music is actually released
+   with (`zik/PlayerAkyMultiPsg.asm:104-105` in OpenTowerDefense —
+   `..._PORT_LSB_RIGHT: equ #84`), and composers assign instruments per-PSG in
+   Arkos Tracker, so a mirrored image would have been noticed in practice.
+   MiSTer cites the CPCWiki page as its own reference and then contradicts its
+   prose, which looks like an implementation slip; SyX's are convenience labels
+   where the choice is inaudible.
 
 10. ~~**PlayCity CTC channel 0 clocking suspected inaccurate.**~~
     **NOT A BUG — measured correct, claim withdrawn.** An earlier pass here
