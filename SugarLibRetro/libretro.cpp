@@ -1319,6 +1319,7 @@ struct RetroWaveHDR : public IWaveHDR
 // below already implements, currently only for the "FDC: ... OK (0)" log
 // line. WAV assets copied verbatim from the same app (see fdc_wav_data.h).
 #include "fdc_wav_data.h"
+#include "embedded_roms.h"
 
 // Real, empirically-discovered format mismatch: these 5 WAV assets are NOT
 // uniformly encoded. seek_short/seek_long/drive_mo are 16-bit/44100Hz, but
@@ -2557,6 +2558,45 @@ static void update_input(void)
 // bundled default; that's the whole point of routing this through
 // IDirectories/GetBaseDirectory() instead of embedding these too.
 
+// The bundled firmware is compiled in (embedded_roms.h) so the core works with
+// an empty system directory -- the RetroArch core downloader has no way to
+// deliver BIOS files, and dropping them by hand is awkward on a handheld. A
+// real file still wins: ChangeSettings() has already run the engine's own
+// file-based load by the time this is called, so an embedded ROM is only
+// applied where that found nothing on disk.
+//
+// Memory::LoadLowerROM()/LoadROM() take a buffer directly -- EmulatorEngine::
+// LoadRom() is just an fopen wrapper around them -- so nothing here touches
+// the filesystem beyond testing whether the override exists.
+static void ApplyEmbeddedRom(int slot, const char* filename)
+{
+   if (emulator_ == nullptr || filename == nullptr || *filename == '\0')
+      return;
+
+   const std::string path = std::string(directories_.GetBaseDirectory()) + "/ROM/" + filename;
+   if (access(path.c_str(), R_OK) == 0)
+      return; // a real file is present, the engine already loaded it
+
+   for (size_t i = 0; i < sizeof(kEmbeddedRoms) / sizeof(kEmbeddedRoms[0]); ++i)
+   {
+      if (strcmp(kEmbeddedRoms[i].name, filename) != 0)
+         continue;
+
+      unsigned char* data = const_cast<unsigned char*>(kEmbeddedRoms[i].data);
+      if (slot < 0)
+         emulator_->GetMem()->LoadLowerROM(data, kEmbeddedRoms[i].size);
+      else
+         emulator_->GetMem()->LoadROM((unsigned char)slot, data, kEmbeddedRoms[i].size);
+
+      if (log_cb != nullptr)
+         log_cb(RETRO_LOG_INFO, "ROM: '%s' not in system dir, using embedded copy.\n", filename);
+      return;
+   }
+
+   if (log_cb != nullptr)
+      log_cb(RETRO_LOG_WARN, "ROM: '%s' is neither on disk nor embedded.\n", filename);
+}
+
 static void ApplyMachineType(const char* model)
 {
    if (model == nullptr || last_applied_model_ == model)
@@ -2712,6 +2752,10 @@ static void ApplyMachineType(const char* model)
       // harmless -- it just re-reads the same banks.
       if (!cart_path.empty())
          emulator_->LoadCpr(cart_path.c_str());
+      // After the engine's file-based load, so files override the embedded set.
+      ApplyEmbeddedRom(-1, lower_rom);
+      ApplyEmbeddedRom(0, upper_rom);
+      ApplyEmbeddedRom(7, "amsdos.rom");
       // ChangeSettings() ran UpdateExternalDevices(), which cleared the
       // expansion list.
       ApplyPlayCity();

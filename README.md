@@ -9,6 +9,19 @@ Retroarch Core emulating Amstrad CPC/CPC+/GX4000
 See [`SugarLibRetro/STATUS.md`](SugarLibRetro/STATUS.md) for the current
 feature matrix and gap-priority tracker.
 
+## Firmware
+
+The CPC firmware ROMs are compiled into the core, so it runs with an empty
+system directory. Amstrad have kindly given their permission for the
+redistribution of their copyrighted material but retain that copyright. The
+embedded dumps are unmodified.
+
+To use your own dumps instead, put them in
+`<system directory>/amstradcpc/ROM/` under the names listed in
+`SugarLibRetro/tools/embed_roms.py`; a file on disk always takes precedence
+over the embedded copy. Run that script to regenerate `embedded_roms.h` after
+changing the bundled set.
+
 ## Testing
 
 `SugarLibRetro/tools/cpc_probe.sh` types BASIC into a running core and reads

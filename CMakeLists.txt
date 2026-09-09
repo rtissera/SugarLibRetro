@@ -32,6 +32,13 @@ else()
       "into the binary. Run SugarLibRetro/tools/blank_multiface_rom.py manually.")
 endif()
 
+# This core writes the CPC key matrix itself (see kKeyMap in libretro.cpp), so
+# it never reads CPCCoreEmu's host scancode tables. Skipping them drops the
+# per-OS Keyboards/ data files from what has to ship, which otherwise means a
+# different file per target -- 101_keyboard_win, 101_keyboard_linux, and one
+# more for anything else.
+set(CPCCORE_NO_HOST_KEYBOARD ON CACHE BOOL "" FORCE)
+
 add_subdirectory(${CPCCORE})
 add_subdirectory(${ZLIB})
 
