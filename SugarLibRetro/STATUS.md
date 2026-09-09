@@ -38,7 +38,7 @@ clean-room in our own MIT code. Never copy source.**
 | Disk write-back (EDSK) | sidecar default, overwrite opt-in, weak-sector guard |
 | Emulated write-protect tab | — |
 | Border crop (normal/full) | — |
-| PlayCity (2nd AY + Z80 CTC) | wired via public `CSig::exp_list_`, default off. **Audio was totally silent until the engine fix below** — now verified emitting real tones. NOT unique — ACE-DL + JavaCPC have it too |
+| PlayCity (2nd AY + Z80 CTC) | wired via public `CSig::exp_list_`, default off. **Audio was totally silent, and the stereo sides were swapped, until the two engine fixes below** — now verified emitting real tones on the correct channels. NOT unique — ACE/ACE-DL and MAME have it too |
 | RAM export + memory map | RetroArch cheat/debug support |
 | Multiface II ROM stripped from binary | was shipping Romantic Robot's commercial firmware in our .so |
 | Headless RAM-probe test harness | `tools/cpc_probe.sh` — permanent dev tooling |
@@ -371,6 +371,34 @@ Ranked by value:
    - A fresh unit-test build dir needs `res/`, `Keyboards/` and `TestConf*.ini`
      linked next to the binary, or the tape tests fail on their own
      "source tape did not actually load" guard rather than on real breakage.
+
+9. ~~**PlayCity stereo channels swapped.**~~ **DONE, sent upstream as PR #35
+   (2026-09-09).** Found by checking the above work against external
+   documentation rather than trusting the code's own internal consistency.
+   `ymz294_1_` answers `&F884`/`&F984` and `ymz294_2_` answers `&F888`/`&F988`,
+   but they were constructed `YMZ294::LEFT`/`YMZ294::RIGHT` respectively — the
+   wrong way round, so every PlayCity tune played on the wrong speaker.
+   Two independent sources agree the first pair is the RIGHT channels:
+   CPCWiki's PlayCity port table, and MAME's `playcity.cpp`, where `m_ymz1`
+   routes to speaker index 1 (front-right) and `m_ymz2` to index 0
+   (front-left). Verified by driving each chip alone and capturing real PCM:
+   `&F884`/`&F984` moved from LEFT to RIGHT, `&F888`/`&F988` confirmed LEFT,
+   full separation both ways.
+
+   **Also corroborated externally:** the measured YMZ clock. CPCWiki says the
+   YMZs are "clocked at 4 MHz but run internally at 2 MHz ... so they will
+   sound like an Atari ST" when CTC channel 0 is left unprogrammed, and MAME's
+   `update_ymz_clock()` applies the same 4 MHz default with an internal `/2`.
+   The tones measured here imply ~1.98 MHz, matching that default.
+
+   **Still open (real accuracy gap, not yet raised):** on real hardware CTC
+   channel 0 *generates* the YMZ clock, so reprogramming its time constant
+   retunes both chips — MAME models this with an explicit rate→clock table.
+   CPCCoreEmu instead uses a fixed `YMZ_CALL = 16>>CLOCK_DIV` divider, with CTC
+   channel 0 only able to *skip* a tick via `drop_next_tick_`. Music that
+   reprograms channel 0 for a non-default clock will therefore play at the
+   wrong pitch. Untested so far — worth a dedicated experiment before
+   claiming either way.
 
 ---
 
