@@ -1857,9 +1857,6 @@ int LoadCprFromBuffer(unsigned char* buffer, int size)
 
 static void ApplyMachineType(const char* model);
 
-// Cached: the frontend allocates one buffer from this and reuses it for every
-// later retro_serialize(), but each probe costs a real snapshot. Reset on a
-// model change, which changes the RAM dump size.
 static size_t serialize_size_ = 0;
 
 void retro_init(void)
@@ -3618,71 +3615,19 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info *info, 
    return retro_load_game(NULL);
 }
 
-// CSnapshot (Snapshot.h/.cpp) only exposes a file-path API
-// (SaveSnapshot/LoadSnapshot write/read a real .sna file) -- there is no
-// in-memory-buffer serializer to call directly, unlike LoadDisk/LoadTape.
-// libretro's retro_serialize/unserialize work against a caller-owned memory
-// buffer, so this bridges the two through a scratch file under the system
-// directory: SaveSnapshot() writes it, then its bytes get read back into the
-// libretro buffer (and the reverse for unserialize). Not zero-copy, but a
-// full CPC snapshot is a few hundred KB at most -- one extra file round
-// trip per save/load is not a meaningful cost.
-// The scratch file used to bounce a snapshot through EmulatorEngine's
-// file-based API. This used to live in the system directory, which is
-// routinely read-only on a real install (and is the wrong place for a
-// temp file regardless) -- save states would simply fail there. Prefer the
-// frontend's save directory, fall back to the system directory, then /tmp.
-static std::string GetScratchSnapshotPath()
-{
-   const char* dir = nullptr;
-   if (!environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) || dir == nullptr || *dir == '\0')
-   {
-      dir = directories_.GetBaseDirectory();
-      if (dir == nullptr || *dir == '\0')
-         dir = "/tmp";
-   }
-   return std::string(dir) + "/sugarbox_savestate.tmp.sna";
-}
-
-// EmulatorEngine::SaveSnapshot() does NOT write synchronously -- it arms
-// do_snapshot_, and HandleSnapshots() performs the write once the Z80 sits on
-// an instruction boundary. A .SNA can only describe the machine there, so some
-// stepping is unavoidable; the question is how much.
+// EmulatorEngine::SaveSnapshotNow()/LoadSnapshotNow() serialise straight to
+// and from memory, so nothing here touches the filesystem: a core has no
+// business opening files, and the save directory is routinely read-only on a
+// real install. These also step only to the next Z80 instruction boundary
+// (a .SNA can only describe the machine there) instead of arming
+// do_snapshot_ and letting a whole 80000-cycle time slice elapse inside
+// HandleSnapshots() while the CPU sits parked and every other component keeps
+// ticking.
 //
-// Driving that with RunFullSpeed() costs a whole time slice per call
-// (time_slice_ * 4000 = 80000 cycles, and StartOptimizedPlus has no early
-// exit), during which stop_on_fetch_ parks the Z80 while the CRTC, PSG, FDC,
-// tape and expansions keep ticking -- so every save desynced the CPU from
-// everything else by a frame, and retro_serialize_size() did it too. Stepping
-// a single instruction instead keeps the machine coherent.
-//
-// new_instruction_ is cleared first for the same reason RunDebugMode() does
-// it: DebugOpcodes() counts boundaries, and a stale flag would make it return
-// before actually ticking. RunDebugMode() itself is unusable here because it
-// also calls HandleSyncro() (real-time pacing, which can sleep) and can emit a
-// display VSync.
-static bool WriteSnapshotAtInstructionBoundary(const std::string& path)
-{
-   remove(path.c_str());
-   if (!emulator_->SaveSnapshot(path.c_str()))
-      return false;
+// Cached because the frontend allocates one buffer from retro_serialize_size()
+// and reuses it for every later call, but each probe costs a real snapshot.
+// Reset on a model change, which changes the RAM dump size.
 
-   emulator_->GetProc()->new_instruction_ = false;
-   unsigned int nb_opcodes = 1;
-   emulator_->GetMotherboard()->DebugOpcodes(nb_opcodes);
-   emulator_->HandleSnapshots();
-
-   FILE* probe = fopen(path.c_str(), "rb");
-   if (probe == nullptr)
-      return false;
-   fclose(probe);
-   return true;
-}
-
-// Cached: the frontend allocates one buffer from this and reuses it for every
-// later retro_serialize(), but each probe costs a real snapshot, so measuring
-// on every call meant repeatedly stepping the machine just to answer a
-// question whose answer does not change.
 size_t retro_serialize_size(void)
 {
    if (emulator_ == nullptr)
@@ -3690,77 +3635,40 @@ size_t retro_serialize_size(void)
    if (serialize_size_ != 0)
       return serialize_size_;
 
-   const std::string path = GetScratchSnapshotPath();
-   if (!WriteSnapshotAtInstructionBoundary(path))
+   std::vector<unsigned char> image;
+   if (!emulator_->SaveSnapshotNow(image) || image.empty())
       return 0;
-   FILE* f = fopen(path.c_str(), "rb");
-   if (f == nullptr)
-      return 0;
-   fseek(f, 0, SEEK_END);
-   const long size = ftell(f);
-   fclose(f);
-   remove(path.c_str());
+
    // Padded because a later save (different tape/disk position, 128K vs 64K
    // dump) can legitimately be larger than this first probe.
-   serialize_size_ = size > 0 ? (size_t)size + 4096 : 0;
+   serialize_size_ = image.size() + 4096;
    return serialize_size_;
 }
 
 bool retro_serialize(void *data_, size_t size)
 {
-   if (emulator_ == nullptr)
-      return false;
-   const std::string path = GetScratchSnapshotPath();
-   if (!WriteSnapshotAtInstructionBoundary(path))
+   if (emulator_ == nullptr || data_ == nullptr)
       return false;
 
-   FILE* f = fopen(path.c_str(), "rb");
-   if (f == nullptr)
+   std::vector<unsigned char> image;
+   if (!emulator_->SaveSnapshotNow(image) || image.empty())
       return false;
-   fseek(f, 0, SEEK_END);
-   const long file_size = ftell(f);
-   rewind(f);
+   if (image.size() > size)
+      return false;
 
-   bool ok = false;
-   if (file_size > 0 && (size_t)file_size <= size)
-   {
-      const size_t read_bytes = fread(data_, 1, (size_t)file_size, f);
-      ok = (read_bytes == (size_t)file_size);
-      // Zero the rest so a shorter save doesn't leave stale bytes from a
-      // previous, larger one lying around in the frontend's buffer.
-      if (ok && (size_t)file_size < size)
-         memset((uint8_t*)data_ + file_size, 0, size - (size_t)file_size);
-   }
-   fclose(f);
-   remove(path.c_str());
-   return ok;
+   memcpy(data_, &image[0], image.size());
+   // Zero the rest so a shorter save does not leave stale bytes from a
+   // previous, larger one in the frontend's buffer.
+   if (image.size() < size)
+      memset((uint8_t*)data_ + image.size(), 0, size - image.size());
+   return true;
 }
 
 bool retro_unserialize(const void *data_, size_t size)
 {
-   if (emulator_ == nullptr || size == 0)
+   if (emulator_ == nullptr || data_ == nullptr || size == 0)
       return false;
-   const std::string path = GetScratchSnapshotPath();
-
-   FILE* f = fopen(path.c_str(), "wb");
-   if (f == nullptr)
-      return false;
-   const size_t written = fwrite(data_, 1, size, f);
-   fclose(f);
-   if (written != size)
-   {
-      remove(path.c_str());
-      return false;
-   }
-
-   // LoadSnapshotNow(), not LoadSnapshot(): the latter just queues the load
-   // for HandleSnapshots() to pick up on a later RunFullSpeed() tick (same
-   // deferred pattern as SaveSnapshot()); retro_unserialize's contract needs
-   // the state fully applied before it returns, so this needs the
-   // synchronous variant.
-   const bool ok = emulator_->LoadSnapshotNow(path.c_str());
-   remove(path.c_str());
-   return ok;
+   return emulator_->LoadSnapshotNow((const unsigned char*)data_, size);
 }
 
 // Base 64K of RAM, via Memory::GetRamBuffer() (a public accessor -- an
