@@ -1857,6 +1857,7 @@ int LoadCprFromBuffer(unsigned char* buffer, int size)
 }
 
 static void ApplyMachineType(const char* model);
+static void ApplyEmbeddedRoms();
 
 static size_t serialize_size_ = 0;
 
@@ -1890,6 +1891,7 @@ void retro_init(void)
    // the real audio path.
    emulator_->InitSound(&retro_sound_);
    emulator_->OnOff();
+   ApplyEmbeddedRoms();
 }
 
 void retro_deinit(void)
@@ -2623,6 +2625,21 @@ static bool ApplyEmbeddedCartridge(const char* filename)
    return false;
 }
 
+// Remembered per model so ApplyEmbeddedRoms() can run again after a power
+// cycle. Set by ApplyMachineType().
+static const char* embedded_lower_rom_ = nullptr;
+static const char* embedded_upper_rom_ = nullptr;
+
+// Fills in whatever the engine's own file-based load did not find. Must run
+// after every UpdateComputer(), which reloads the ROMs from disk and would
+// otherwise leave the machine with no firmware paged in.
+static void ApplyEmbeddedRoms()
+{
+   ApplyEmbeddedRom(-1, embedded_lower_rom_);
+   ApplyEmbeddedRom(0, embedded_upper_rom_);
+   ApplyEmbeddedRom(7, "amsdos.rom");
+}
+
 static void ApplyMachineType(const char* model)
 {
    if (model == nullptr || last_applied_model_ == model)
@@ -2783,10 +2800,13 @@ static void ApplyMachineType(const char* model)
          else
             ApplyEmbeddedCartridge(cartridge_file);
       }
-      // After the engine's file-based load, so files override the embedded set.
-      ApplyEmbeddedRom(-1, lower_rom);
-      ApplyEmbeddedRom(0, upper_rom);
-      ApplyEmbeddedRom(7, "amsdos.rom");
+      // Remember what this model needs so the fallback can be reapplied after
+      // any later power cycle -- OnOff() re-runs UpdateComputer(), which calls
+      // InitMemory() and reloads the ROMs from disk, discarding whatever was
+      // installed from memory here.
+      embedded_lower_rom_ = lower_rom;
+      embedded_upper_rom_ = upper_rom;
+      ApplyEmbeddedRoms();
       // ChangeSettings() ran UpdateExternalDevices(), which cleared the
       // expansion list.
       ApplyPlayCity();
