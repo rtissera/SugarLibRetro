@@ -362,12 +362,16 @@ Ranked by value:
    validated independently against the built-in PSG (`SOUND 1,284` → exactly
    220.0 Hz).
 
-   **Two testing gotchas worth keeping** (both cost real time here):
-   - **Xvfb + `video_driver=sdl2` silently freezes the emulator** — zero Z80
-     `OUT`s execute, while the core's own key-matrix injection still logs, so
-     it looks alive. `pause_nonactive=false` does not help. Use
-     `video_driver=null` for anything measuring guest execution; this also
-     means `tools/cpc_probe.sh`'s config is unsuitable for audio work.
+   **Testing gotchas worth keeping:**
+   - **A running key-matrix log does not mean the CPU is running.** The autorun
+     typist injects those events either way. Several "the emulator is frozen"
+     conclusions here — blamed in turn on `video_driver=sdl2`, on audio, and on
+     the memory export — were all one thing: a config with no `system_directory`,
+     so no ROMs were found and the machine never executed. Measure RAM
+     occupancy instead: count non-zero bytes in `GetMem()->GetRamBuffer()`.
+     Dead machine reads 0; a live 6128 at the BASIC prompt reads ~3295 and
+     fluctuates. `tools/cpc_probe.sh` and `video_driver=sdl2` under Xvfb are
+     both fine.
    - A fresh unit-test build dir needs `res/`, `Keyboards/` and `TestConf*.ini`
      linked next to the binary, or the tape tests fail on their own
      "source tape did not actually load" guard rather than on real breakage.
