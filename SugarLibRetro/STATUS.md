@@ -38,7 +38,7 @@ clean-room in our own MIT code. Never copy source.**
 | Disk write-back (EDSK) | sidecar default, overwrite opt-in, weak-sector guard |
 | Emulated write-protect tab | — |
 | Border crop (normal/full) | — |
-| PlayCity (2nd AY + Z80 CTC) | wired via public `CSig::exp_list_`, default off. NOT unique — ACE-DL + JavaCPC have it too |
+| PlayCity (2nd AY + Z80 CTC) | wired via public `CSig::exp_list_`, default off. **Audio was totally silent until the engine fix below** — now verified emitting real tones. NOT unique — ACE-DL + JavaCPC have it too |
 | RAM export + memory map | RetroArch cheat/debug support |
 | Multiface II ROM stripped from binary | was shipping Romantic Robot's commercial firmware in our .so |
 | Headless RAM-probe test harness | `tools/cpc_probe.sh` — permanent dev tooling |
@@ -67,8 +67,12 @@ Ranked by value:
    default off. Verified end-to-end headless: `PRINT #8,"..."` produced a
    byte-exact captured file when enabled, nothing when disabled.
 
-2. ~~**Tape record/save.**~~ **RE-ATTEMPTED AND REVERTED AGAIN (2026-09-08)
-   — moved to Tier 2, this is a real engine bug, not a wrapper bug.**
+2. ~~**Tape record/save.**~~ **RESOLVED — see Tier 2 item 1.** The
+   investigation below correctly concluded this was a real engine bug rather
+   than a wrapper bug; it was then fixed in the fork and merged upstream as
+   PR #32. Kept here for the root-cause trail.
+   *(Original note, 2026-09-08: re-attempted and reverted again, moved to
+   Tier 2, this is a real engine bug, not a wrapper bug.)*
    Wired `sugarbox_tape_record` (experimental): arm `InsertBlankTape()` +
    `Rewind()` + `Record()` at load, `SaveAsCdtCSW()` at unload. Root-caused
    both problems from the original note with a real crash, not a guess:
@@ -245,7 +249,16 @@ Ranked by value:
 
 ### Tier 2 — needs a CPCCoreEmu (submodule) change — raise with Thomas first
 
-1. ~~**Tape record/save.**~~ **DONE (2026-09-08)** — CPCCore is now
+> **Upstream status (2026-09-09):** the fork exists at
+> `github.com/rtissera/CPCCore` (branch `reglinux-wip`), and **three fixes
+> from this project are now merged into `Tom1975/CPCCore` master**: PR #32
+> (tape recording bugs + the AddressSanitizer CI fixes), PR #33
+> (`Z84C30::In()`), PR #34 (PlayCity silence). The fork's master is
+> fast-forwarded to upstream and `reglinux-wip` is rebased on top of it, so
+> the only patch still carried locally is `CTape::StopRecord()`.
+
+1. ~~**Tape record/save.**~~ **DONE (2026-09-08), engine fixes merged
+   upstream as PR #32 (2026-09-09)** — CPCCore is now
    forked (`github.com/rtissera/CPCCore`, branch `reglinux-wip`), which
    unblocked fixing this at the engine level instead of waiting on
    upstream. Two real underflow/corruption bugs found and fixed in
@@ -319,9 +332,45 @@ Ranked by value:
    emulator (`RunUntilSnapshotWritten`), which violates the libretro
    contract.
 
-7. **`Z84C30::In()` empty stub.** PlayCity's CTC always reads back the
-   floating bus (255) — small, already flagged upstream-worthy alongside
-   the above.
+7. ~~**`Z84C30::In()` empty stub.**~~ **DONE, merged upstream as PR #33
+   (2026-09-09).** The CTC channel-read handler never wrote to `*data` at
+   all, so every read returned whatever was already in the caller's buffer
+   (a floating bus) instead of the counter. Real Z80 CTC hardware always
+   answers with the current down-counter value, and CPCCoreEmu's tick-driven
+   `Z84C30` already keeps `down_counter_` exact, so the fix is a direct read.
+   Two differential CTests added (`In_ReturnsLiveDownCounterValue`,
+   `In_OnUnarmedChannelReturnsCounterNotFloatingBus`); reverting the one-line
+   fix makes both fail with the `0xFF` sentinel untouched. Behavioural
+   reference only (no code copied): MAME's `z80ctc.cpp`.
+
+8. ~~**PlayCity produced no sound at all.**~~ **DONE, merged upstream as
+   PR #34 (2026-09-09).** Not a wiring gap — registration, I/O dispatch and
+   clocking were all already correct (measured: `PlayCity::Tick()` runs at
+   exactly 4 MHz). `PlayCity::Tick()` decrements `next_call_ymz_` and *then*
+   tests it against 0, but the constructor never initialised it — only
+   `Reset()` did, and `Reset()` only runs for expansions already plugged in,
+   so a board attached later never got it. From 0 it goes to -1 and keeps
+   falling, so the test never matches again and **neither YMZ294 was ever
+   clocked**: 0 chip ticks in 36,000,000 PlayCity ticks. Fixed by
+   initialising it (and `trg0_update_`) in the constructor.
+
+   Verified by programming a tone straight into the YMZ294 from BASIC
+   (`OUT &F984`/`&F884` → mixer, volume, tone period) and capturing real PCM:
+   silence (RMS `0.00000000`) before, **487.2 Hz** with 3f/5f/7f harmonics
+   after at period 254, **982.0 Hz** at period 127 (ratio 2.016 — the
+   expected doubling), and silent again with PlayCity disabled. Harness
+   validated independently against the built-in PSG (`SOUND 1,284` → exactly
+   220.0 Hz).
+
+   **Two testing gotchas worth keeping** (both cost real time here):
+   - **Xvfb + `video_driver=sdl2` silently freezes the emulator** — zero Z80
+     `OUT`s execute, while the core's own key-matrix injection still logs, so
+     it looks alive. `pause_nonactive=false` does not help. Use
+     `video_driver=null` for anything measuring guest execution; this also
+     means `tools/cpc_probe.sh`'s config is unsuitable for audio work.
+   - A fresh unit-test build dir needs `res/`, `Keyboards/` and `TestConf*.ini`
+     linked next to the binary, or the tape tests fail on their own
+     "source tape did not actually load" guard rather than on real breakage.
 
 ---
 
