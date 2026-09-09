@@ -11,8 +11,8 @@ feature matrix and gap-priority tracker.
 
 ## Firmware
 
-The CPC firmware ROMs are compiled into the core, so it runs with an empty
-system directory. Amstrad have kindly given their permission for the
+The CPC firmware ROMs and the Plus/GX4000 system cartridge are compiled into
+the core, so it runs with an empty system directory. Amstrad have kindly given their permission for the
 redistribution of their copyrighted material but retain that copyright. The
 embedded dumps are unmodified.
 

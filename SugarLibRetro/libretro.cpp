@@ -2597,6 +2597,32 @@ static void ApplyEmbeddedRom(int slot, const char* filename)
       log_cb(RETRO_LOG_WARN, "ROM: '%s' is neither on disk nor embedded.\n", filename);
 }
 
+// Same fallback for the Plus/GX4000 system cartridge, which both
+// cartridge-booting models share. LoadCprFromBuffer() copies the banks out of
+// the buffer, so the embedded image does not have to outlive the call.
+static bool ApplyEmbeddedCartridge(const char* filename)
+{
+   if (emulator_ == nullptr || filename == nullptr || *filename == '\0')
+      return false;
+
+   for (size_t i = 0; i < sizeof(kEmbeddedRoms) / sizeof(kEmbeddedRoms[0]); ++i)
+   {
+      if (strcmp(kEmbeddedRoms[i].name, filename) != 0)
+         continue;
+      unsigned char* data = const_cast<unsigned char*>(kEmbeddedRoms[i].data);
+      const bool ok = emulator_->LoadCprFromBuffer(data, (int)kEmbeddedRoms[i].size) == 0;
+      if (log_cb != nullptr)
+         log_cb(ok ? RETRO_LOG_INFO : RETRO_LOG_WARN,
+            "Cartridge: '%s' not in system dir, embedded copy %s.\n",
+            filename, ok ? "used" : "FAILED");
+      return ok;
+   }
+
+   if (log_cb != nullptr)
+      log_cb(RETRO_LOG_WARN, "Cartridge: '%s' is neither on disk nor embedded.\n", filename);
+   return false;
+}
+
 static void ApplyMachineType(const char* model)
 {
    if (model == nullptr || last_applied_model_ == model)
@@ -2751,7 +2777,12 @@ static void ApplyMachineType(const char* model)
       // Calling LoadCpr() a second time for Plus (already auto-loaded) is
       // harmless -- it just re-reads the same banks.
       if (!cart_path.empty())
-         emulator_->LoadCpr(cart_path.c_str());
+      {
+         if (access(cart_path.c_str(), R_OK) == 0)
+            emulator_->LoadCpr(cart_path.c_str());
+         else
+            ApplyEmbeddedCartridge(cartridge_file);
+      }
       // After the engine's file-based load, so files override the embedded set.
       ApplyEmbeddedRom(-1, lower_rom);
       ApplyEmbeddedRom(0, upper_rom);

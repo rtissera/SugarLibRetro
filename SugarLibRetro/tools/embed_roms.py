@@ -5,8 +5,8 @@ Run from the SugarLibRetro/ directory after changing the bundled ROM set:
 
     python3 tools/embed_roms.py
 
-The GX4000 cartridge (system.cpr) is deliberately left out: it is 128K, only
-one model needs it, and LoadCpr() reads it straight from the system directory.
+Covers the .rom set plus system.cpr, the Plus/GX4000 system cartridge that
+both cartridge-booting models share.
 """
 import os
 import sys
@@ -36,9 +36,10 @@ def main():
     if not os.path.isdir(SRC):
         sys.exit('%s not found -- run this from the SugarLibRetro/ directory' % SRC)
 
-    names = sorted(n for n in os.listdir(SRC) if n.endswith('.rom'))
+    names = sorted(n for n in os.listdir(SRC)
+                   if n.endswith('.rom') or n.endswith('.cpr'))
     if not names:
-        sys.exit('no .rom files in %s' % SRC)
+        sys.exit('no .rom or .cpr files in %s' % SRC)
 
     out = [HEADER]
     for name in names:
@@ -60,7 +61,7 @@ def main():
 
     with open(DST, 'w') as f:
         f.write('\n'.join(out) + '\n')
-    print('%s: %d ROMs, %d bytes' % (DST, len(names), os.path.getsize(DST)))
+    print('%s: %d images, %d bytes' % (DST, len(names), os.path.getsize(DST)))
 
 
 if __name__ == '__main__':
