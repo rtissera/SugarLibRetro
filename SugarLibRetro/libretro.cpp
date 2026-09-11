@@ -20,6 +20,7 @@
 // CPCCoreEmu's CMakeLists pass them to the library build.
 
 #include "Machine.h"
+#include "MachineState.h"
 #include "Cartridge.h"
 #include "IDirectories.h"
 #include "Inotify.h"
@@ -3710,17 +3711,28 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info *info, 
    return retro_load_game(NULL);
 }
 
-// EmulatorEngine::SaveSnapshotNow()/LoadSnapshotNow() serialise straight to
-// and from memory, so nothing here touches the filesystem: a core has no
-// business opening files, and the save directory is routinely read-only on a
-// real install. These also step only to the next Z80 instruction boundary
-// (a .SNA can only describe the machine there) instead of arming
-// do_snapshot_ and letting a whole 80000-cycle time slice elapse inside
-// HandleSnapshots() while the CPU sits parked and every other component keeps
-// ticking.
+// Savestates use MachineState, not a bare .SNA.
+//
+// A .SNA is an interchange format: it describes the machine an Amstrad user
+// could see, and has no field at any version for the scheduler's per-component
+// cycle debt, for where the CPU sits inside an instruction, or for where a drive
+// head or a tape sits. A machine restored from one drifts away from the run it
+// came from within a few time slices, which is exactly what rewind and netplay
+// cannot tolerate. MachineState keeps the .SNA for everything the container can
+// express and adds chunks for the rest, at a cost of 939 bytes -- under one
+// percent on a 6128.
+//
+// The .SNA path is still what loads and saves user-facing .sna files; the two
+// are different jobs and now use different code.
+//
+// Everything is in memory: a core has no business opening files, and the save
+// directory is routinely read-only on a real install. Saving also steps only to
+// the next Z80 instruction boundary instead of arming do_snapshot_ and letting a
+// whole 80000-cycle time slice elapse inside HandleSnapshots() while the CPU
+// sits parked and every other component keeps ticking.
 //
 // Cached because the frontend allocates one buffer from retro_serialize_size()
-// and reuses it for every later call, but each probe costs a real snapshot.
+// and reuses it for every later call, but each probe costs a real save.
 // Reset on a model change, which changes the RAM dump size.
 
 size_t retro_serialize_size(void)
@@ -3731,7 +3743,7 @@ size_t retro_serialize_size(void)
       return serialize_size_;
 
    std::vector<unsigned char> image;
-   if (!emulator_->SaveSnapshotNow(image) || image.empty())
+   if (!MachineState::Save(emulator_, image) || image.empty())
       return 0;
 
    // Padded because a later save (different tape/disk position, 128K vs 64K
@@ -3746,7 +3758,7 @@ bool retro_serialize(void *data_, size_t size)
       return false;
 
    std::vector<unsigned char> image;
-   if (!emulator_->SaveSnapshotNow(image) || image.empty())
+   if (!MachineState::Save(emulator_, image) || image.empty())
       return false;
    if (image.size() > size)
       return false;
@@ -3763,7 +3775,7 @@ bool retro_unserialize(const void *data_, size_t size)
 {
    if (emulator_ == nullptr || data_ == nullptr || size == 0)
       return false;
-   return emulator_->LoadSnapshotNow((const unsigned char*)data_, size);
+   return MachineState::Load(emulator_, (const unsigned char*)data_, size);
 }
 
 // Base 64K of RAM, via Memory::GetRamBuffer() (a public accessor -- an
