@@ -3596,6 +3596,25 @@ bool retro_load_game(const struct retro_game_info *info)
    {
       if (IsCartridgeFile(info->path))
       {
+         // A .cpr only exists for Plus hardware -- GX4000, 464 Plus, 6128
+         // Plus. Loading one on a 6128 used to leave the machine a 6128: the
+         // cartridge banks went in, but with no ASIC and no cartridge port
+         // the firmware just booted BASIC, and the user saw a Ready prompt
+         // with no hint that anything was wrong.
+         //
+         // 6128 Plus rather than GX4000 when a switch is needed: it runs
+         // GX4000 titles, which only want the ASIC and a joystick, while the
+         // console's 64K and missing disk would break a 6128 Plus cartridge.
+         // A Plus model the user has already chosen is left alone.
+         if (last_applied_model_ != "plus6128" && last_applied_model_ != "gx4000")
+         {
+            if (log_cb != nullptr)
+               log_cb(RETRO_LOG_INFO,
+                  "Cartridge: %s is Plus-only media; switching from '%s' to 'plus6128'.\n",
+                  info->path, last_applied_model_.c_str());
+            ApplyMachineType("plus6128");
+         }
+
          // Cartridge banks are a distinct memory region from ROM/disk (see
          // LoadCprFromBuffer) -- a fresh cartridge genuinely does need the
          // machine reset, same as swapping a real GX4000 cartridge requires
