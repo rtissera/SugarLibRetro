@@ -47,6 +47,9 @@ TIMEOUT=${CPC_PROBE_TIMEOUT:-120}
 
 cfg=$(mktemp) || exit 1
 cat > "$cfg" <<EOF
+# Never write any of this back: RetroArch saves its configuration on
+# exit, so an --appendconfig value ends up in the user's retroarch.cfg.
+config_save_on_exit = "false"
 pause_nonactive = "false"
 video_vsync = "false"
 video_driver = "sdl2"
