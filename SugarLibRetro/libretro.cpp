@@ -1679,7 +1679,15 @@ static void HandleAutorunForLoadedItem(int load_ok, int drive_number)
       // bare RUN" is routed to the disc, which answers "Bad command" when
       // there is no disc in the drive. Loading a tape broke the moment AMSDOS
       // was wired up, because before that RUN" fell through to the cassette.
-      ArmAutorun("|TAPE\rRUN\"\r");
+      //
+      // The trailing CR is the "any key" the cassette firmware then asks for:
+      // RUN" prints "Press PLAY then any key:" and blocks until one arrives.
+      // There is no PLAY button to press -- CPCCore drives the motor straight
+      // off PPI port C bit 4 (PPI.cpp, CTape::SetMotorOn), so playback starts
+      // by itself -- but nothing was ever sending the key, and every tape in
+      // the corpus sat on that prompt forever. Typing it early is harmless:
+      // the key waits in the firmware's buffer and the prompt consumes it.
+      ArmAutorun("|TAPE\rRUN\"\r\r");
    }
    else if (emulator_ != nullptr)
    {
