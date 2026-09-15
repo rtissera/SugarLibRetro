@@ -2082,8 +2082,15 @@ void retro_set_environment(retro_environment_t cb)
       { "Amstrad CPC Lightgun", RETRO_DEVICE_LIGHTGUN },
    };
 
+   // Second port: the GX4000's joystick 2, on row 6 of the matrix. Only
+   // read on that model -- see update_input.
+   static const struct retro_controller_description controllers2[] = {
+      { "GX4000 Joystick 2", RETRO_DEVICE_JOYPAD },
+   };
+
    static const struct retro_controller_info ports[] = {
       { controllers, 2 },
+      { controllers2, 1 },
       { NULL, 0 },
    };
 
@@ -2503,7 +2510,36 @@ static void update_input(void)
          matrix[combo_r2_line_] &= ~(1 << combo_r2_bit_);
    }
 
-   for (size_t i = 0; i < active_keymap_size_; ++i)
+   // GX4000: a console with two joystick ports and no keyboard. The second
+   // port is wired to row 6, the line a CPC shares between joystick 2 and
+   // the 6/5/R/T/G/F/B keys (KeyboardHandler::JoystickAction uses the same
+   // line). On a computer those keys would fight the stick; on a GX4000
+   // nothing else drives row 6, so the port is only wired there, and the
+   // host keyboard is ignored below for the same reason.
+   const bool console = last_applied_model_ == "gx4000";
+   if (console)
+   {
+      int dir2_x = input_state_cb(1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 5000;
+      int dir2_y = input_state_cb(1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 5000;
+      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP))
+         dir2_y--;
+      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN))
+         dir2_y++;
+      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT))
+         dir2_x--;
+      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
+         dir2_x++;
+
+      // Same bits, in the same order, as joystick 0 on row 9.
+      if (dir2_y < 0) matrix[6] &= ~0x01;
+      if (dir2_y > 0) matrix[6] &= ~0x02;
+      if (dir2_x < 0) matrix[6] &= ~0x04;
+      if (dir2_x > 0) matrix[6] &= ~0x08;
+      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X)) matrix[6] &= ~0x10;
+      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A)) matrix[6] &= ~0x20;
+   }
+
+   for (size_t i = 0; !console && i < active_keymap_size_; ++i)
    {
       if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, active_keymap_[i].retrok))
          matrix[active_keymap_[i].line] &= ~(1 << active_keymap_[i].bit);
@@ -3534,6 +3570,13 @@ bool retro_load_game(const struct retro_game_info *info)
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "Fire 1" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "Fire 2" },
+      // Second joystick, GX4000 only (see update_input).
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left" },
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down" },
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "Fire 1" },
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "Fire 2" },
       { 0 },
    };
 
