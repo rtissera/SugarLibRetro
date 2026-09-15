@@ -2757,7 +2757,10 @@ static void ApplyMachineType(const char* model)
       : default_crtc);
    machine_settings_.SetTapePlugged(tape_plugged);
    machine_settings_.SetFDCPlugged(fdc_plugged);
-   machine_settings_.SetPALPlugged(true);
+   // The PAL is the 6128's RAM banking chip. Without it, writes to the bank
+   // register must do nothing; with it present on a 64K machine,
+   // Memory::SetMemoryMap falls back to extended page 0 and shows 128K.
+   machine_settings_.SetPALPlugged(ram != MachineSettings::M64_K);
 
    std::string cart_path;
    if (cartridge_file != nullptr)
