@@ -1789,80 +1789,19 @@ static void fallback_log(enum retro_log_level level, const char *fmt, ...)
    va_end(va);
 }
 
+// Cartridge content from the frontend goes through the engine's loader, like the
+// embedded system cartridge already does (ApplyEmbeddedCartridge). This used to
+// be a private copy of an older version of it, which accepted any page number
+// below 256 and any block no larger than the whole file and wrote past the
+// 32-page cartridge bank; it also never recorded the cartridge CRC, so a save
+// state could be loaded against a different cartridge. The engine's loader
+// validates the whole file first, handles 1.5 MB legacy cartridges (PicoGX) and
+// resets the machine itself.
 int LoadCprFromBuffer(unsigned char* buffer, int size)
 {
-   // Check RIFF chunk
-   int index = 0;
-   if (size >= 12
-      && (memcmp(&buffer[0], "RIFF", 4) == 0)
-      && (memcmp(&buffer[8], "AMS!", 4) == 0)
-      )
-   {
-      // Reinit Cartridge
-      motherboard_->EjectCartridge();
-
-      // Ok, it's correct.
-      index += 4;
-      // Check the whole size
-
-      int chunk_size = buffer[index]
-         + (buffer[index + 1] << 8)
-         + (buffer[index + 2] << 16)
-         + (buffer[index + 3] << 24);
-
-      index += 8;
-
-      // 'fmt ' chunk ? skip it
-      if (index + 8 < size && (memcmp(&buffer[index], "fmt ", 4) == 0))
-      {
-         index += 8;
-      }
-
-      // Good.
-      // Now we are at the first cbxx
-      while (index + 8 < size)
-      {
-         if (buffer[index] == 'c' && buffer[index + 1] == 'b')
-         {
-            index += 2;
-            char buffer_block_number[3] = { 0 };
-            memcpy(buffer_block_number, &buffer[index], 2);
-            int block_number = (buffer_block_number[0] - '0') * 10 + (buffer_block_number[1] - '0');
-            index += 2;
-
-            // Read size
-            int block_size = buffer[index]
-               + (buffer[index + 1] << 8)
-               + (buffer[index + 2] << 16)
-               + (buffer[index + 3] << 24);
-            index += 4;
-
-            if (block_size <= size && block_number < 256)
-            {
-               // Copy datas to proper ROM
-               unsigned char* rom = motherboard_->GetCartridge(block_number);
-               memset(rom, 0, 0x1000);
-               memcpy(rom, &buffer[index], block_size);
-               index += block_size;
-            }
-            else
-            {
-               return -1;
-            }
-         }
-         else
-         {
-            return -1;
-         }
-      }
-   }
-   else
-   {
-      // Incorrect headers
+   if (emulator_ == nullptr || buffer == nullptr || size <= 0)
       return -1;
-   }
-
-   return 0;
+   return emulator_->LoadCprFromBuffer(buffer, size);
 }
 
 static void ApplyMachineType(const char* model);
