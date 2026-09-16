@@ -2449,12 +2449,16 @@ static void update_input(void)
          matrix[combo_r2_line_] &= ~(1 << combo_r2_bit_);
    }
 
-   // GX4000: a console with two joystick ports and no keyboard. The second
-   // port is wired to row 6, the line a CPC shares between joystick 2 and
-   // the 6/5/R/T/G/F/B keys (KeyboardHandler::JoystickAction uses the same
-   // line). On a computer those keys would fight the stick; on a GX4000
-   // nothing else drives row 6, so the port is only wired there, and the
-   // host keyboard is ignored below for the same reason.
+   // GX4000: a console with two joystick ports and a Pause button, and no
+   // keyboard. The second port is wired to row 6, the line a CPC shares
+   // between joystick 2 and the 6/5/R/T/G/F/B keys
+   // (KeyboardHandler::JoystickAction uses the same line). On a computer those
+   // keys would fight the stick, so the port is only wired there.
+   //
+   // The keyboard itself is not filtered here: the machine decides what is
+   // wired, and CPCCore's KeyboardHandler reads a GX4000 matrix as Pause plus
+   // the two joysticks and nothing else. Whatever the host sends on the other
+   // lines never reaches the game.
    const bool console = last_applied_model_ == "gx4000";
    if (console)
    {
@@ -2476,9 +2480,18 @@ static void update_input(void)
       if (dir2_x > 0) matrix[6] &= ~0x08;
       if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X)) matrix[6] &= ~0x10;
       if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A)) matrix[6] &= ~0x20;
+
+      // The console's Pause button sits on the P key position of the matrix
+      // (line 3, bit 3), the one key line a GX4000 has. START on either pad
+      // presses it; so does P on a host keyboard, through the normal map.
+      if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START)
+         || input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START))
+      {
+         matrix[3] &= ~0x08;
+      }
    }
 
-   for (size_t i = 0; !console && i < active_keymap_size_; ++i)
+   for (size_t i = 0; i < active_keymap_size_; ++i)
    {
       if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, active_keymap_[i].retrok))
          matrix[active_keymap_[i].line] &= ~(1 << active_keymap_[i].bit);
@@ -3512,7 +3525,10 @@ bool retro_load_game(const struct retro_game_info *info)
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "Fire 1" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "Fire 2" },
+      // GX4000 only (see update_input): the console's Pause button.
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Pause (GX4000)" },
       // Second joystick, GX4000 only (see update_input).
+      { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Pause (GX4000)" },
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left" },
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down" },
