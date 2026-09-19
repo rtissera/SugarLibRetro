@@ -589,13 +589,29 @@ public:
             const unsigned int r = (p >> 16) & 0xFF;
             const unsigned int g = (p >> 8) & 0xFF;
             const unsigned int b = p & 0xFF;
-            const unsigned int luma = (77 * r + 150 * g + 29 * b) >> 8;
+            // A monochrome CPC monitor is fed R, G and B down the DIN and
+            // sums them in analogue hardware; it does not apply a perceptual
+            // TV weighting. Rec.601 (blue = 29/256) rendered the default
+            // Mode 1 paper -- CPC Blue -- at G=13 against G=216 text, a ratio
+            // of 0.06, i.e. effectively black. A photograph of a real GT65
+            // showing the same boot screen measures 0.28 (paper G=102, text
+            // G=255, camera black floor G=42). An equal-weight sum predicts
+            // 0.25, so that is the model used here.
+            const unsigned int luma = (r + g + b) / 3;
             unsigned int outr, outg, outb;
             if (monitor_type_ == MONITOR_GREEN)
             {
-               outr = (luma * 40) >> 8;
+               // The GT65 tube is an Orion 310GNB31, phosphor P31
+               // (confirmed from the CPC664/6128 service manual). P31's
+               // chromaticity (0.210, 0.710) lies outside sRGB, so it is
+               // gamut mapped by desaturating toward D65 until red reaches
+               // zero: that yields (0, 1.0, 0.53) once gamma encoded -- a
+               // green leaning blue, not the symmetric tint used before.
+               // The GT65 photograph measures a blue:green of 0.66, so the
+               // lean is real and this is, if anything, conservative.
+               outr = 0;
                outg = luma;
-               outb = (luma * 40) >> 8;
+               outb = (luma * 135) >> 8;
             }
             else // MONITOR_AMBER
             {
