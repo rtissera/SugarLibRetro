@@ -63,3 +63,65 @@ jobs:
           name: SugarLibRetro-${{ matrix.name }}
           path: ${{ env.core }}
           if-no-files-found: error
+
+  # Architectures with no GitHub-hosted runner. Cross-compiled on an x86_64
+  # runner with the distro cross toolchains, then the tests are RUN under
+  # qemu-user via CMAKE_CROSSCOMPILING_EMULATOR -- so this is not just a
+  # "does it compile" job.
+  #
+  # One baseline build per architecture, deliberately, not a build per CPU
+  # variant: per-core tuning belongs in the REG-Linux per-CPU prebuilds.
+  cross:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-armv7
+            packages: crossbuild-essential-armhf
+            toolchain: cmake/toolchain-armv7.cmake
+          - name: linux-riscv64
+            packages: crossbuild-essential-riscv64
+            toolchain: cmake/toolchain-riscv64.cmake
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install cross toolchain and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }} qemu-user-static
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUGARLIBRETRO_BUILD_TESTS=ON \
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/${{ matrix.toolchain }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test (under qemu-user)
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Check the binary really is for the target architecture
+        run: |
+          so=$(find build -name 'libSugarLibRetro.so' | head -1)
+          [ -n "$so" ] || { echo "core not produced"; exit 1; }
+          file "$so"
+          file "$so" | grep -qiE 'ARM|RISC-V' || { echo "not a cross-built binary"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SugarLibRetro-${{ matrix.name }}
+          path: build/SugarLibRetro/libSugarLibRetro.so
+          if-no-files-found: error
