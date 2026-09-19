@@ -30,24 +30,9 @@
 #include <mutex>
 #include <unistd.h>
 
-// Visible window cut out of the emulator's internal raster buffer, which is
-// 1024 ints wide with rows written at 2y (see RetroDisplay::GetVideoBuffer),
-// so roughly 1008 x 576 of it is real picture.
-//
-// "normal" is the long-standing crop: picture plus a thin border, which is
-// what most software expects. "full" widens it to show the CPC's overscan
-// region, which demos and a fair amount of French software draw into. The
-// frontend is told the full size as its maximum so the geometry can change at
-// runtime without a reinit; cap32 exposes the same idea as cap32_scr_crop.
-#define WIDTH  640
-#define HEIGHT 480
-#define OFFSET_X 207
-#define OFFSET_Y 84
-
-#define FULL_WIDTH  800
-#define FULL_HEIGHT 560
-#define FULL_OFFSET_X 112
-#define FULL_OFFSET_Y 8
+// Geometry constants and the pure coordinate transforms live in their own
+// header so they can be unit tested without a core (see tests/).
+#include "display_geometry.h"
 
 
 #define M_PI    3.14159265358979323846264338327950288   /* pi */
@@ -556,7 +541,7 @@ public:
       // pitch by two rows skips the blank ones at zero cost. crop_y_ is even
       // in both border modes (84 / 8), so row parity survives the crop.
       int* src = &video_buffer[crop_x_ + 1024 * crop_y_];
-      const int out_h = crop_h_ / 2;
+      const int out_h = SugarboxOutputHeight(crop_h_);
       if (monitor_type_ == MONITOR_COLOR)
       {
          // OSK draws here, into the SAME live buffer the CRTC/gate-array
@@ -1939,10 +1924,10 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    // the same native line count every other CPC core reports (cap32 272,
    // MAME's gx4000 272) and the line count CRT shaders expect.
    info->geometry.base_width = display_.CropWidth();
-   info->geometry.base_height = display_.CropHeight() / 2;
+   info->geometry.base_height = SugarboxOutputHeight(display_.CropHeight());
 
    info->geometry.max_width = FULL_WIDTH;
-   info->geometry.max_height = FULL_HEIGHT / 2;
+   info->geometry.max_height = SugarboxOutputHeight(FULL_HEIGHT);
    info->geometry.aspect_ratio = aspect;
 
    last_aspect = aspect;
@@ -2399,9 +2384,9 @@ static void update_input(void)
          const int16_t gun_x = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X);
          const int16_t gun_y = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_Y);
          const bool gun_trigger = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_TRIGGER);
-         const int displayed_x = ((int)gun_x + 0x8000) * display_.CropWidth() / 0x10000;
-         const int displayed_y = ((int)gun_y + 0x8000) * display_.CropHeight() / 0x10000;
-         emulator_->GunSet(displayed_x + display_.CropOffsetX(), displayed_y + display_.CropOffsetY(), gun_trigger ? 1 : 0);
+         const int buffer_x = SugarboxGunBufferX(gun_x, display_.CropWidth(), display_.CropOffsetX());
+         const int buffer_y = SugarboxGunBufferY(gun_y, display_.CropHeight(), display_.CropOffsetY());
+         emulator_->GunSet(buffer_x, buffer_y, gun_trigger ? 1 : 0);
       }
    }
 

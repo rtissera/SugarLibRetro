@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.16)
 
 # Nom du projet
 project(SugarLibRetro)
@@ -39,9 +39,36 @@ endif()
 # more for anything else.
 set(CPCCORE_NO_HOST_KEYBOARD ON CACHE BOOL "" FORCE)
 
+# zlib registers its own CTest suite, which turns up in our results the
+# moment enable_testing() is called at the top level. We do not test zlib.
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
 add_subdirectory(${CPCCORE})
 add_subdirectory(${ZLIB})
 
 add_subdirectory(SugarLibRetro)
 
 
+
+# Tests are opt-in: the REG-Linux package build and the libretro buildbot only
+# want the core, and configuring googletest for them would be pure cost.
+#   cmake -DSUGARLIBRETRO_BUILD_TESTS=ON && ctest
+option(SUGARLIBRETRO_BUILD_TESTS "Build the unit tests" OFF)
+
+if (SUGARLIBRETRO_BUILD_TESTS)
+   # enable_testing() has to be called at the TOP level or ctest finds no
+   # tests to run from the build root, however many gtest_discover_tests()
+   # calls the subdirectories make.
+   enable_testing()
+
+   # This project rewrites /MD to /MT (see SugarLibRetro/CMakeLists.txt), so
+   # googletest must be built against the static runtime too or MSVC fails to
+   # link with LNK2038. Must be set BEFORE the subdirectory is added.
+   set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
+   set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+   set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+   add_subdirectory(${PROJECT_SOURCE_DIR}/CPCCore/googletest googletest)
+
+   add_subdirectory(SugarLibRetro/tests)
+endif()
