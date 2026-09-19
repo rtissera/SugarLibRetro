@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  name: linux,   artifact: libSugarLibRetro.so }
+          - { os: windows-latest, name: windows, artifact: SugarLibRetro.dll }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The build blanks Romantic Robot's bundled Multiface II firmware before
+      # compiling (see the root CMakeLists). Without Python that step only
+      # WARNS and the ROM ends up inside a published binary, so make sure CI
+      # always has an interpreter rather than silently shipping it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSUGARLIBRETRO_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest -C Release --output-on-failure
+
+      - name: Locate core
+        shell: bash
+        run: |
+          found=$(find build -name '${{ matrix.artifact }}' | head -1)
+          if [ -z "$found" ]; then echo "core not produced"; find build -name '*SugarLibRetro*'; exit 1; fi
+          echo "core=$found" >> "$GITHUB_ENV"
+          echo "built $found"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SugarLibRetro-${{ matrix.name }}
+          path: ${{ env.core }}
+          if-no-files-found: error
