@@ -14,8 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  name: linux,   artifact: libSugarLibRetro.so }
-          - { os: windows-latest, name: windows, artifact: SugarLibRetro.dll }
+          # Standard GitHub-hosted runners are free and unlimited on public
+          # repositories, arm64 included, so every target here is native --
+          # no cross-compiling, no QEMU.
+          - { os: ubuntu-latest,    name: linux-x86_64,   artifact: libSugarLibRetro.so }
+          - { os: ubuntu-24.04-arm, name: linux-arm64,    artifact: libSugarLibRetro.so }
+          - { os: windows-latest,   name: windows-x86_64, artifact: SugarLibRetro.dll }
+          - { os: windows-11-arm,   name: windows-arm64,  artifact: SugarLibRetro.dll }
 
     steps:
       - uses: actions/checkout@v4
