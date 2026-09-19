@@ -1529,6 +1529,15 @@ public:
 
    virtual bool Busy()
    {
+      // Busy() is what PPI port B bit 6 reports, and "1" there means not ready
+      // (https://cpctech.cpcwiki.de/docs/8255cpc.html). With capture off there
+      // is no printer on the port, and an undriven line reads as not ready --
+      // the same thing the engine reports when nothing is plugged in at all.
+      // Without this a guest always saw a printer sitting ready, on every
+      // model, because Out() only ever sets busy_ while enabled.
+      if (!enabled_)
+         return true;
+
       const bool was_busy = busy_;
       busy_ = false;
       return was_busy;
