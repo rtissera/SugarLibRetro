@@ -28,7 +28,25 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <unistd.h>
+
+// unistd.h is POSIX and MSVC has no such header. The only thing this file
+// wants from it is access(), which the Microsoft CRT provides as _access() in
+// <io.h> without the mode constants.
+#ifdef _MSC_VER
+   #include <io.h>
+   #define access _access
+   #ifndef F_OK
+      #define F_OK 0
+   #endif
+   #ifndef R_OK
+      #define R_OK 4
+   #endif
+   #ifndef W_OK
+      #define W_OK 2
+   #endif
+#else
+   #include <unistd.h>
+#endif
 
 // Geometry constants and the pure coordinate transforms live in their own
 // header so they can be unit tested without a core (see tests/).
