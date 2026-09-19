@@ -1,0 +1,127 @@
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Standard GitHub-hosted runners are free and unlimited on public
+          # repositories, arm64 included, so every target here is native --
+          # no cross-compiling, no QEMU.
+          - { os: ubuntu-latest,    name: linux-x86_64,   artifact: libSugarLibRetro.so }
+          - { os: ubuntu-24.04-arm, name: linux-arm64,    artifact: libSugarLibRetro.so }
+          - { os: windows-latest,   name: windows-x86_64, artifact: SugarLibRetro.dll }
+          - { os: windows-11-arm,   name: windows-arm64,  artifact: SugarLibRetro.dll }
+          # CMake gives a SHARED library the .dylib suffix on Apple. Nobody
+          # has built this core on macOS before, so treat a failure here as
+          # news about the code rather than about the workflow.
+          - { os: macos-latest,     name: macos-arm64,    artifact: libSugarLibRetro.dylib }
+          - { os: macos-15-intel,   name: macos-x86_64,   artifact: libSugarLibRetro.dylib }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The build blanks Romantic Robot's bundled Multiface II firmware before
+      # compiling (see the root CMakeLists). Without Python that step only
+      # WARNS and the ROM ends up inside a published binary, so make sure CI
+      # always has an interpreter rather than silently shipping it.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSUGARLIBRETRO_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        working-directory: build
+        run: ctest -C Release --output-on-failure
+
+      - name: Locate core
+        shell: bash
+        run: |
+          found=$(find build -name '${{ matrix.artifact }}' | head -1)
+          if [ -z "$found" ]; then echo "core not produced"; find build -name '*SugarLibRetro*'; exit 1; fi
+          echo "core=$found" >> "$GITHUB_ENV"
+          echo "built $found"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SugarLibRetro-${{ matrix.name }}
+          path: ${{ env.core }}
+          if-no-files-found: error
+
+  # Architectures with no GitHub-hosted runner. Cross-compiled on an x86_64
+  # runner with the distro cross toolchains, then the tests are RUN under
+  # qemu-user via CMAKE_CROSSCOMPILING_EMULATOR -- so this is not just a
+  # "does it compile" job.
+  #
+  # One baseline build per architecture, deliberately, not a build per CPU
+  # variant: per-core tuning belongs in the REG-Linux per-CPU prebuilds.
+  cross:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-armv7
+            packages: crossbuild-essential-armhf
+            toolchain: cmake/toolchain-armv7.cmake
+          - name: linux-riscv64
+            packages: crossbuild-essential-riscv64
+            toolchain: cmake/toolchain-riscv64.cmake
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install cross toolchain and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }} qemu-user-static
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUGARLIBRETRO_BUILD_TESTS=ON \
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/${{ matrix.toolchain }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test (under qemu-user)
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Check the binary really is for the target architecture
+        run: |
+          so=$(find build -name 'libSugarLibRetro.so' | head -1)
+          [ -n "$so" ] || { echo "core not produced"; exit 1; }
+          file "$so"
+          file "$so" | grep -qiE 'ARM|RISC-V' || { echo "not a cross-built binary"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SugarLibRetro-${{ matrix.name }}
+          path: build/SugarLibRetro/libSugarLibRetro.so
+          if-no-files-found: error

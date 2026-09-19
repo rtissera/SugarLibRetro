@@ -28,26 +28,29 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <unistd.h>
 
-// Visible window cut out of the emulator's internal raster buffer, which is
-// 1024 ints wide with rows written at 2y (see RetroDisplay::GetVideoBuffer),
-// so roughly 1008 x 576 of it is real picture.
-//
-// "normal" is the long-standing crop: picture plus a thin border, which is
-// what most software expects. "full" widens it to show the CPC's overscan
-// region, which demos and a fair amount of French software draw into. The
-// frontend is told the full size as its maximum so the geometry can change at
-// runtime without a reinit; cap32 exposes the same idea as cap32_scr_crop.
-#define WIDTH  640
-#define HEIGHT 480
-#define OFFSET_X 207
-#define OFFSET_Y 84
+// unistd.h is POSIX and MSVC has no such header. The only thing this file
+// wants from it is access(), which the Microsoft CRT provides as _access() in
+// <io.h> without the mode constants.
+#ifdef _MSC_VER
+   #include <io.h>
+   #define access _access
+   #ifndef F_OK
+      #define F_OK 0
+   #endif
+   #ifndef R_OK
+      #define R_OK 4
+   #endif
+   #ifndef W_OK
+      #define W_OK 2
+   #endif
+#else
+   #include <unistd.h>
+#endif
 
-#define FULL_WIDTH  800
-#define FULL_HEIGHT 560
-#define FULL_OFFSET_X 112
-#define FULL_OFFSET_Y 8
+// Geometry constants and the pure coordinate transforms live in their own
+// header so they can be unit tested without a core (see tests/).
+#include "display_geometry.h"
 
 
 #define M_PI    3.14159265358979323846264338327950288   /* pi */
@@ -177,7 +180,7 @@ static const unsigned char* GetOskGlyph(char c)
 // renders identically whether sugarbox_monitor is color/green/amber.
 // `stride` is in ints, matching how VSync already indexes both the raw
 // 1024-wide live buffer and the tightly-packed mono_buffer_.
-static void OskDrawGlyph(int* buf, int stride, int x, int y, int scale, unsigned int color, char c)
+static void OskDrawGlyph(int* buf, int stride, int x, int y, int scale, int scale_y, unsigned int color, char c)
 {
    const unsigned char* rows = GetOskGlyph(c);
    if (rows == nullptr)
@@ -188,19 +191,19 @@ static void OskDrawGlyph(int* buf, int stride, int x, int y, int scale, unsigned
       {
          if (((rows[row] >> (4 - col)) & 1) == 0)
             continue;
-         for (int sy = 0; sy < scale; ++sy)
+         for (int sy = 0; sy < scale_y; ++sy)
             for (int sx = 0; sx < scale; ++sx)
-               buf[(y + row * scale + sy) * stride + (x + col * scale + sx)] = (int)color;
+               buf[(y + row * scale_y + sy) * stride + (x + col * scale + sx)] = (int)color;
       }
    }
 }
 
-static void OskDrawText(int* buf, int stride, int x, int y, int scale, unsigned int color, const char* text)
+static void OskDrawText(int* buf, int stride, int x, int y, int scale, int scale_y, unsigned int color, const char* text)
 {
    int cursor_x = x;
    for (; *text != '\0'; ++text)
    {
-      OskDrawGlyph(buf, stride, cursor_x, y, scale, color, *text);
+      OskDrawGlyph(buf, stride, cursor_x, y, scale, scale_y, color, *text);
       cursor_x += (5 + 1) * scale;
    }
 }
@@ -429,19 +432,24 @@ static char OskGridCellChar(const OskGridCell& c)
    return (osk_shift_ && c.shifted != 0) ? c.shifted : (c.unshifted != 0 ? c.unshifted : c.shifted);
 }
 
-// Panel geometry in the SAME post-crop coordinate space OskDrawText uses.
-// Sized against the smaller "normal" border crop (640x480) so it never
+// Panel geometry in the SAME post-crop coordinate space OskDrawText uses,
+// which is now one row per CPC scanline (see RetroDisplay::VSync), so every
+// vertical measure here is half what it was when the core emitted the
+// emulator's doubled rows. Those rows are displayed roughly twice as tall
+// as they are wide at 4:3, which is why the glyphs take scale_y 1 against a
+// horizontal scale of 2 and still come out square on screen.
+// Sized against the smaller "normal" border crop (640x240) so it never
 // overflows in the "full" border mode either.
 #define OSK_PANEL_X 40
-#define OSK_PANEL_Y 40
+#define OSK_PANEL_Y 20
 #define OSK_PANEL_W 300
-#define OSK_ROW_H 26
+#define OSK_ROW_H 13
 #define OSK_TEXT_SCALE 2
 
 #define OSK_GRID_CELL_W 40
-#define OSK_GRID_CELL_H 50
+#define OSK_GRID_CELL_H 25
 #define OSK_GRID_X 10
-#define OSK_GRID_Y 60
+#define OSK_GRID_Y 30
 
 static void DrawOskCommandList(int* buf, int stride)
 {
@@ -452,7 +460,7 @@ static void DrawOskCommandList(int* buf, int stride)
       const int row_y = OSK_PANEL_Y + 6 + i * OSK_ROW_H;
       if (i == osk_command_index_)
          OskDrawFilledRect(buf, stride, OSK_PANEL_X + 4, row_y - 2, OSK_PANEL_W - 8, OSK_ROW_H - 2, 0xFF3050A0u);
-      OskDrawText(buf, stride, OSK_PANEL_X + 10, row_y, OSK_TEXT_SCALE, 0xFFE8E8E8u, kOskCommands[i].label);
+      OskDrawText(buf, stride, OSK_PANEL_X + 10, row_y, OSK_TEXT_SCALE, 1, 0xFFE8E8E8u, kOskCommands[i].label);
    }
 }
 
@@ -474,17 +482,17 @@ static void DrawOskGrid(int* buf, int stride)
          const OskGridCell& c = ActiveOskGrid()[row][col];
          if (c.special != nullptr)
          {
-            OskDrawText(buf, stride, cx + 2, cy + 12, 1, 0xFFE8E8E8u, c.special);
+            OskDrawText(buf, stride, cx + 2, cy + 6, 1, 1, 0xFFE8E8E8u, c.special);
          }
          else
          {
             const char text[2] = { OskGridCellChar(c), '\0' };
-            OskDrawText(buf, stride, cx + 12, cy + 8, 2, 0xFFE8E8E8u, text);
+            OskDrawText(buf, stride, cx + 12, cy + 4, 2, 1, 0xFFE8E8E8u, text);
          }
       }
    }
    const int hint_y = OSK_GRID_Y + OSK_GRID_ROWS * OSK_GRID_CELL_H + 4;
-   OskDrawText(buf, stride, OSK_GRID_X, hint_y, 1, osk_shift_ ? 0xFF60FF60u : 0xFF808080u, "SHIFT");
+   OskDrawText(buf, stride, OSK_GRID_X, hint_y, 1, 1, osk_shift_ ? 0xFF60FF60u : 0xFF808080u, "SHIFT");
 }
 
 static void DrawOskPanel(int* buf, int stride, int w, int h)
@@ -541,14 +549,24 @@ public:
    virtual int GetHeight() { return crop_h_; };
    virtual void VSync(bool bDbg)
    {
+      // The emulator writes one CPC scanline into every OTHER buffer row
+      // (GetVideoBuffer() returns row 2y, which is the upstream convention --
+      // CPCCore's own UnitTests/Display.cpp does the same), and nothing ever
+      // fills the odd rows: a probe of a booted 6128 found 280 of 280 odd
+      // rows fully black. Handing those to the frontend was a scanline CRT
+      // effect baked into the core by omission. Emit the real lines instead
+      // and leave CRT simulation to the frontend's shaders: stepping the
+      // pitch by two rows skips the blank ones at zero cost. crop_y_ is even
+      // in both border modes (84 / 8), so row parity survives the crop.
       int* src = &video_buffer[crop_x_ + 1024 * crop_y_];
+      const int out_h = SugarboxOutputHeight(crop_h_);
       if (monitor_type_ == MONITOR_COLOR)
       {
          // OSK draws here, into the SAME live buffer the CRTC/gate-array
          // just rendered into -- it gets fully overwritten by real picture
          // data again next frame, same as any per-frame raster overlay.
-         DrawOskPanel(src, 1024, crop_w_, crop_h_);
-         video_cb(src, crop_w_, crop_h_, pitch_);
+         DrawOskPanel(src, 2048, crop_w_, out_h);
+         video_cb(src, crop_w_, out_h, pitch_ * 2);
          return;
       }
 
@@ -564,9 +582,9 @@ public:
       // would compound every frame.
       //
       // Rec.601 luma, tinted to the phosphor colour.
-      for (int y = 0; y < crop_h_; ++y)
+      for (int y = 0; y < out_h; ++y)
       {
-         const int* in = src + 1024 * y;
+         const int* in = src + 1024 * (y * 2);
          int* out = mono_buffer_ + crop_w_ * y;
          for (int x = 0; x < crop_w_; ++x)
          {
@@ -574,13 +592,29 @@ public:
             const unsigned int r = (p >> 16) & 0xFF;
             const unsigned int g = (p >> 8) & 0xFF;
             const unsigned int b = p & 0xFF;
-            const unsigned int luma = (77 * r + 150 * g + 29 * b) >> 8;
+            // A monochrome CPC monitor is fed R, G and B down the DIN and
+            // sums them in analogue hardware; it does not apply a perceptual
+            // TV weighting. Rec.601 (blue = 29/256) rendered the default
+            // Mode 1 paper -- CPC Blue -- at G=13 against G=216 text, a ratio
+            // of 0.06, i.e. effectively black. A photograph of a real GT65
+            // showing the same boot screen measures 0.28 (paper G=102, text
+            // G=255, camera black floor G=42). An equal-weight sum predicts
+            // 0.25, so that is the model used here.
+            const unsigned int luma = (r + g + b) / 3;
             unsigned int outr, outg, outb;
             if (monitor_type_ == MONITOR_GREEN)
             {
-               outr = (luma * 40) >> 8;
+               // The GT65 tube is an Orion 310GNB31, phosphor P31
+               // (confirmed from the CPC664/6128 service manual). P31's
+               // chromaticity (0.210, 0.710) lies outside sRGB, so it is
+               // gamut mapped by desaturating toward D65 until red reaches
+               // zero: that yields (0, 1.0, 0.53) once gamma encoded -- a
+               // green leaning blue, not the symmetric tint used before.
+               // The GT65 photograph measures a blue:green of 0.66, so the
+               // lean is real and this is, if anything, conservative.
+               outr = 0;
                outg = luma;
-               outb = (luma * 40) >> 8;
+               outb = (luma * 135) >> 8;
             }
             else // MONITOR_AMBER
             {
@@ -591,8 +625,8 @@ public:
             out[x] = (int)(0xFF000000u | (outr << 16) | (outg << 8) | outb);
          }
       }
-      DrawOskPanel(mono_buffer_, crop_w_, crop_w_, crop_h_);
-      video_cb(mono_buffer_, crop_w_, crop_h_, crop_w_ * sizeof(unsigned int));
+      DrawOskPanel(mono_buffer_, crop_w_, crop_w_, out_h);
+      video_cb(mono_buffer_, crop_w_, out_h, crop_w_ * sizeof(unsigned int));
    }
    virtual void StartSync(){};
    virtual void WaitVbl() {};
@@ -1903,11 +1937,15 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    info->timing.sample_rate = sampling_rate;
    
    //info->geometry = (struct retro_game_geometry) {
+   // Half height: VSync() emits one row per CPC scanline rather than the
+   // emulator's doubled rows, so 800x560 of buffer is an 800x280 picture --
+   // the same native line count every other CPC core reports (cap32 272,
+   // MAME's gx4000 272) and the line count CRT shaders expect.
    info->geometry.base_width = display_.CropWidth();
-   info->geometry.base_height = display_.CropHeight();
+   info->geometry.base_height = SugarboxOutputHeight(display_.CropHeight());
 
    info->geometry.max_width = FULL_WIDTH;
-   info->geometry.max_height = FULL_HEIGHT;
+   info->geometry.max_height = SugarboxOutputHeight(FULL_HEIGHT);
    info->geometry.aspect_ratio = aspect;
 
    last_aspect = aspect;
@@ -2364,9 +2402,9 @@ static void update_input(void)
          const int16_t gun_x = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X);
          const int16_t gun_y = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_SCREEN_Y);
          const bool gun_trigger = input_state_cb(0, RETRO_DEVICE_LIGHTGUN, 0, RETRO_DEVICE_ID_LIGHTGUN_TRIGGER);
-         const int displayed_x = ((int)gun_x + 0x8000) * display_.CropWidth() / 0x10000;
-         const int displayed_y = ((int)gun_y + 0x8000) * display_.CropHeight() / 0x10000;
-         emulator_->GunSet(displayed_x + display_.CropOffsetX(), displayed_y + display_.CropOffsetY(), gun_trigger ? 1 : 0);
+         const int buffer_x = SugarboxGunBufferX(gun_x, display_.CropWidth(), display_.CropOffsetX());
+         const int buffer_y = SugarboxGunBufferY(gun_y, display_.CropHeight(), display_.CropOffsetY());
+         emulator_->GunSet(buffer_x, buffer_y, gun_trigger ? 1 : 0);
       }
    }
 
@@ -2378,19 +2416,19 @@ static void update_input(void)
    bool mouse_up = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_WHEELUP);
    bool mouse_middle = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_MIDDLE);
    if (mouse_x)
-      log_cb(RETRO_LOG_INFO, "Mouse X: %d\n", mouse_x);
+      log_cb(RETRO_LOG_DEBUG, "Mouse X: %d\n", mouse_x);
    if (mouse_y)
-      log_cb(RETRO_LOG_INFO, "Mouse Y: %d\n", mouse_y);
+      log_cb(RETRO_LOG_DEBUG, "Mouse Y: %d\n", mouse_y);
    if (mouse_l)
-      log_cb(RETRO_LOG_INFO, "Mouse L pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse L pressed.\n");
    if (mouse_r)
-      log_cb(RETRO_LOG_INFO, "Mouse R pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse R pressed.\n");
    if (mouse_down)
-      log_cb(RETRO_LOG_INFO, "Mouse wheeldown pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse wheeldown pressed.\n");
    if (mouse_up)
-      log_cb(RETRO_LOG_INFO, "Mouse wheelup pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse wheelup pressed.\n");
    if (mouse_middle)
-      log_cb(RETRO_LOG_INFO, "Mouse middle pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse middle pressed.\n");
 
    mouse_rel_x += mouse_x;
    mouse_rel_y += mouse_y;
