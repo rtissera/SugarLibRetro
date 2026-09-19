@@ -1962,7 +1962,11 @@ void retro_set_environment(retro_environment_t cb)
       // multi-disc software expects. Fed from the playlist's second entry,
       // the same convention the Amiga cores use for their extra drives.
       { "sugarbox_drive_b", "Second disk drive (B:) from playlist; disabled|enabled" },
-      { "sugarbox_border", "Screen border; normal|full" },
+      // Full border by default: Plus software draws in the border (sscrtest's
+      // magenta bands, sprite demos), and cropping to 640x480 cuts it off. The
+      // frontend is told FULL_WIDTH/FULL_HEIGHT as the maximum, so switching
+      // back to "normal" at runtime still works.
+      { "sugarbox_border", "Screen border; full|normal" },
       // Second AY pair + Z80 CTC on ports 0xF880-0xF8FF. Off by default: it
       // changes which RunFullSpeed() instantiation the engine dispatches to.
       { "sugarbox_playcity", "PlayCity expansion; disabled|enabled" },
