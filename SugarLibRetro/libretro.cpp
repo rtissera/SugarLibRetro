@@ -2413,19 +2413,19 @@ static void update_input(void)
    bool mouse_up = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_WHEELUP);
    bool mouse_middle = input_state_cb(0, RETRO_DEVICE_MOUSE, 0, RETRO_DEVICE_ID_MOUSE_MIDDLE);
    if (mouse_x)
-      log_cb(RETRO_LOG_INFO, "Mouse X: %d\n", mouse_x);
+      log_cb(RETRO_LOG_DEBUG, "Mouse X: %d\n", mouse_x);
    if (mouse_y)
-      log_cb(RETRO_LOG_INFO, "Mouse Y: %d\n", mouse_y);
+      log_cb(RETRO_LOG_DEBUG, "Mouse Y: %d\n", mouse_y);
    if (mouse_l)
-      log_cb(RETRO_LOG_INFO, "Mouse L pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse L pressed.\n");
    if (mouse_r)
-      log_cb(RETRO_LOG_INFO, "Mouse R pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse R pressed.\n");
    if (mouse_down)
-      log_cb(RETRO_LOG_INFO, "Mouse wheeldown pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse wheeldown pressed.\n");
    if (mouse_up)
-      log_cb(RETRO_LOG_INFO, "Mouse wheelup pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse wheelup pressed.\n");
    if (mouse_middle)
-      log_cb(RETRO_LOG_INFO, "Mouse middle pressed.\n");
+      log_cb(RETRO_LOG_DEBUG, "Mouse middle pressed.\n");
 
    mouse_rel_x += mouse_x;
    mouse_rel_y += mouse_y;
