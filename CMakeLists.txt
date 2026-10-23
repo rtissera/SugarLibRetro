@@ -39,6 +39,13 @@ endif()
 # more for anything else.
 set(CPCCORE_NO_HOST_KEYBOARD ON CACHE BOOL "" FORCE)
 
+# zlib is linked in statically: a core is a single .so, and the bundled
+# shared libz.so.1 would only exist in the build tree.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+
 add_subdirectory(${CPCCORE})
 add_subdirectory(${ZLIB})
 

@@ -21,7 +21,6 @@
 
 #include "Machine.h"
 #include "MachineState.h"
-#include "Cartridge.h"
 #include "IDirectories.h"
 #include "Inotify.h"
 #include "libretro.h"
@@ -1320,7 +1319,15 @@ struct RetroWaveHDR : public IWaveHDR
 // below already implements, currently only for the "FDC: ... OK (0)" log
 // line. WAV assets copied verbatim from the same app (see fdc_wav_data.h).
 #include "fdc_wav_data.h"
+#if SUGARBOX_EMBED_ROMS
 #include "embedded_roms.h"
+#else
+// Built with -DSUGARBOX_EMBED_ROMS=OFF: no firmware is compiled in, so every
+// ROM and the Plus/GX4000 system cartridge must be present under
+// <system directory>/amstradcpc/ROM/. The empty-name entry never matches.
+struct EmbeddedRom { const char* name; const unsigned char* data; unsigned int size; };
+static const EmbeddedRom kEmbeddedRoms[] = { { "", nullptr, 0 } };
+#endif
 
 // Real, empirically-discovered format mismatch: these 5 WAV assets are NOT
 // uniformly encoded. seek_short/seek_long/drive_mo are 16-bit/44100Hz, but

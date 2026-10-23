@@ -10,6 +10,17 @@ file( GLOB HEADERS
 )
 
 add_library(SugarLibRetro SHARED ${SRCS} ${HEADERS}  )
+
+# The CPC firmware and the Plus/GX4000 system cartridge are compiled in by
+# default so the core runs with an empty system directory. Turn this off to
+# leave them out (about 400 KB smaller); the files must then be supplied under
+# <system directory>/amstradcpc/ROM/.
+option(SUGARBOX_EMBED_ROMS "Compile the CPC firmware into the core" ON)
+if(SUGARBOX_EMBED_ROMS)
+   target_compile_definitions(SugarLibRetro PRIVATE SUGARBOX_EMBED_ROMS=1)
+else()
+   target_compile_definitions(SugarLibRetro PRIVATE SUGARBOX_EMBED_ROMS=0)
+endif()
 target_include_directories( SugarLibRetro PUBLIC ${CPCCORE})
 set_target_properties(${LIBRARY_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -55,9 +66,9 @@ if(MSVC)
 	ADD_DEFINITIONS(/arch:SSE2)
 else ()
    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      target_link_libraries ( SugarLibRetro  m CPCCoreEmu zlib)
+      target_link_libraries ( SugarLibRetro  m CPCCoreEmu zlibstatic)
    else()
-      target_link_libraries ( SugarLibRetro  m stdc++fs CPCCoreEmu zlib)
+      target_link_libraries ( SugarLibRetro  m stdc++fs CPCCoreEmu zlibstatic)
    endif()
 endif()
 
